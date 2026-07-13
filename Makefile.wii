@@ -1,0 +1,83 @@
+# SDLPoP Wii build experiment
+
+DEVKITPRO ?= /opt/devkitpro
+DEVKITPPC ?= $(DEVKITPRO)/devkitPPC
+
+WIIPORTLIBS := $(DEVKITPRO)/portlibs/wii
+PPCPORTLIBS := $(DEVKITPRO)/portlibs/ppc
+
+export PATH := $(DEVKITPPC)/bin:$(DEVKITPRO)/tools/bin:$(PATH)
+export PKG_CONFIG_PATH := $(WIIPORTLIBS)/lib/pkgconfig:$(PPCPORTLIBS)/lib/pkgconfig
+
+CC := powerpc-eabi-gcc
+ELF2DOL := elf2dol
+
+BUILD := build-wii
+ELF := prince.elf
+DOL := boot.dol
+
+SRC := \
+	src/main.c \
+	src/data.c \
+	src/seg000.c \
+	src/seg001.c \
+	src/seg002.c \
+	src/seg003.c \
+	src/seg004.c \
+	src/seg005.c \
+	src/seg006.c \
+	src/seg007.c \
+	src/seg008.c \
+	src/seg009.c \
+	src/seqtbl.c \
+	src/replay.c \
+	src/options.c \
+	src/lighting.c \
+	src/screenshot.c \
+	src/menu.c \
+	src/midi.c \
+	src/opl3.c \
+	src/stb_vorbis.c
+
+OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC))
+
+CFLAGS := \
+	-Wall \
+	-D_GNU_SOURCE=1 \
+	-D__WII__=1 \
+	-std=c99 \
+	-O2 \
+	-mrvl \
+	-mcpu=750 \
+	-meabi \
+	-mhard-float \
+	-I$(DEVKITPRO)/libogc/include \
+	$(shell pkg-config --cflags sdl2 SDL2_image)
+
+LDFLAGS := \
+	-mrvl \
+	-mcpu=750 \
+	-meabi \
+	-mhard-float \
+	-Wl,-Map,$(BUILD)/prince.map
+
+LIBS := $(shell pkg-config --libs --static sdl2 SDL2_image)
+
+all: $(DOL)
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+$(BUILD)/%.o: src/%.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(ELF): $(OBJ)
+	$(CC) $(LDFLAGS) $(OBJ) -o $@ $(LIBS)
+
+$(DOL): $(ELF)
+	$(ELF2DOL) $(ELF) $(DOL)
+
+clean:
+	rm -rf $(BUILD) $(ELF) $(DOL)
+
+.PHONY: all clean

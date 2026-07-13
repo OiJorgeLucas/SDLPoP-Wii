@@ -2612,7 +2612,17 @@ void set_gr_mode(byte grmode) {
 		         // fallthrough!
 		default: break;
 	}
-	renderer_ = SDL_CreateRenderer(window_, -1 , flags | SDL_RENDERER_TARGETTEXTURE);
+	Uint32 renderer_flags = flags | SDL_RENDERER_TARGETTEXTURE;
+	renderer_ = SDL_CreateRenderer(window_, -1, renderer_flags);
+	if (renderer_ == NULL) {
+		printf("Warning: renderer with target texture unavailable, retrying without target texture: %s\n", SDL_GetError());
+		renderer_ = SDL_CreateRenderer(window_, -1, flags);
+	}
+	if (renderer_ == NULL) {
+		sdlperror("set_gr_mode: SDL_CreateRenderer");
+		quit(1);
+	}
+
 	SDL_RendererInfo renderer_info;
 	if (SDL_GetRendererInfo(renderer_, &renderer_info) == 0) {
 		if (renderer_info.flags & SDL_RENDERER_TARGETTEXTURE) {

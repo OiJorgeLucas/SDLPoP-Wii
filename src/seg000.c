@@ -2469,8 +2469,20 @@ void show_splash() {
 
 const char* get_writable_file_path(char* custom_path_buffer, size_t max_len, const char* file_name) {
 	// If the SDLPOP_SAVE_PATH environment variable is set, put all saves into the directory it points to.
-	// Otherwise, save to the home directory
-#if defined WIN32 || _WIN32 || WIN64 || _WIN64
+	// Otherwise, save to the home directory.
+	// On Wii/GameCube homebrew, prefer the app folder on SD, then USB.
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	const char* custom_save_path = getenv("SDLPOP_SAVE_PATH");
+	const char* save_path = NULL;
+	struct stat path_stat;
+
+	if (custom_save_path != NULL && custom_save_path[0] != '\0')
+		save_path = custom_save_path;
+	else if (stat("sd:/apps/sdlpop", &path_stat) == 0 && S_ISDIR(path_stat.st_mode))
+		save_path = "sd:/apps/sdlpop";
+	else
+		save_path = "usb:/apps/sdlpop";
+#elif defined WIN32 || _WIN32 || WIN64 || _WIN64
 	const char* save_path = getenv("SDLPOP_SAVE_PATH");
 #else
 	char save_path[POP_MAX_PATH];

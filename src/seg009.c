@@ -100,7 +100,15 @@ bool file_exists(const char* filename) {
 
 const char* find_first_file_match(char* dst, int size, char* format, const char* filename) {
 	find_exe_dir();
-#if defined WIN32 || _WIN32 || WIN64 || _WIN64
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	const char* dirs[3] = {"sd:/apps/sdlpop", "usb:/apps/sdlpop", exe_dir};
+	for (int i = 0; i < 3; i++) {
+		snprintf_check(dst, size, format, dirs[i], filename);
+		if(file_exists(dst))
+			return (const char*) dst;
+	}
+	snprintf_check(dst, size, format, dirs[0], filename);
+#elif defined WIN32 || _WIN32 || WIN64 || _WIN64
 	snprintf_check(dst, size, format, exe_dir, filename);
 #else
 	find_home_dir();
@@ -117,7 +125,18 @@ const char* find_first_file_match(char* dst, int size, char* format, const char*
 
 const char* locate_save_file_(const char* filename, char* dst, int size) {
 	find_exe_dir();
-#if defined WIN32 || _WIN32 || WIN64 || _WIN64
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	const char* dirs[3] = {"sd:/apps/sdlpop", "usb:/apps/sdlpop", exe_dir};
+	for (int i = 0; i < 3; i++) {
+		struct stat path_stat;
+		int result = stat(dirs[i], &path_stat);
+		if (result == 0 && S_ISDIR(path_stat.st_mode)) {
+			snprintf_check(dst, size, "%s/%s", dirs[i], filename);
+			return (const char*) dst;
+		}
+	}
+	snprintf_check(dst, size, "%s/%s", dirs[0], filename);
+#elif defined WIN32 || _WIN32 || WIN64 || _WIN64
 	snprintf_check(dst, size, "%s/%s", exe_dir, filename);
 #else
 	find_home_dir();

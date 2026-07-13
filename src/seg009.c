@@ -996,7 +996,16 @@ int set_joy_mode() {
 	}
 	if (enable_controller_rumble && is_joyst_mode) {
 		sdl_haptic = SDL_HapticOpen(0);
-		SDL_HapticRumbleInit(sdl_haptic); // initialize the device for simple rumble
+		if (sdl_haptic != NULL) {
+			if (SDL_HapticRumbleInit(sdl_haptic) != 0) { // initialize the device for simple rumble
+				SDL_HapticClose(sdl_haptic);
+				sdl_haptic = NULL;
+			}
+		}
+		if (sdl_haptic == NULL) {
+			printf("Warning: controller rumble unavailable, ignoring enable_controller_rumble = true\n");
+			enable_controller_rumble = 0;
+		}
 	} else {
 		sdl_haptic = NULL;
 	}

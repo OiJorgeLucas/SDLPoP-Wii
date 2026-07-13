@@ -95,3 +95,6 @@ screenshots/
 /prince.elf
 /*.elf
 /*.dol
+
+# Wii test package
+/dist-wii/

@@ -19,6 +19,7 @@ The authors of this program may be contacted at https://forum.princed.org
 */
 
 #include "common.h"
+#include <string.h>
 #include <time.h>
 #include <errno.h>
 
@@ -2624,6 +2625,18 @@ void set_gr_mode(byte grmode) {
 	}
 #endif
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	// Wii fullscreen defaults for console builds.
+	start_fullscreen = 1;
+	use_correct_aspect_ratio = 0;
+	use_integer_scaling = 0;
+	pop_window_width = 640;
+	pop_window_height = 480;
+	flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+	flags &= ~(SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+	SDL_ShowCursor(SDL_DISABLE);
+#endif
+
 #ifdef USE_REPLAY
 	if (!is_validate_mode) // run without a window if validating a replay
 #endif
@@ -3449,15 +3462,36 @@ void start_timer(int timer_index, int length) {
 }
 
 void toggle_fullscreen(void) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	SDL_SetWindowFullscreen(window_, SDL_WINDOW_FULLSCREEN_DESKTOP);
+	SDL_ShowCursor(SDL_DISABLE);
+#else
 	uint32_t flags = SDL_GetWindowFlags(window_);
 	if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {
 		SDL_SetWindowFullscreen(window_, 0);
 		SDL_ShowCursor(SDL_ENABLE);
-	}
-	else {
+	} else {
 		SDL_SetWindowFullscreen(window_, SDL_WINDOW_FULLSCREEN_DESKTOP);
 		SDL_ShowCursor(SDL_DISABLE);
 	}
+#endif
+}
+
+static bool is_wii_classic_controller(void) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (sdl_controller_ == NULL) {
+		return false;
+	}
+
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+	return SDL_GameControllerHasButton(sdl_controller_, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ||
+		SDL_GameControllerHasButton(sdl_controller_, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
+#else
+	return false;
+#endif
+#else
+	return false;
+#endif
 }
 
 bool ignore_tab = false;
@@ -3639,10 +3673,38 @@ void process_events() {
 					case SDL_CONTROLLER_BUTTON_DPAD_UP:    joy_button_states[JOYINPUT_DPAD_UP] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; // up
 					case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  joy_button_states[JOYINPUT_DPAD_DOWN] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; // down
 
-					case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** A (down) ***/
-					case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** Y (up) ***/
-					case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** X (Shift) ***/
-					case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** B (unused) ***/
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+						case SDL_CONTROLLER_BUTTON_A:
+							joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+							break; // Classic B / Wii Remote 2: jump
+
+						case SDL_CONTROLLER_BUTTON_B:
+							joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+							break; // Classic A / Wii Remote 1: special, walk, grab, hang
+
+						case SDL_CONTROLLER_BUTTON_X:
+							key_states[SDL_SCANCODE_SPACE] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+							last_key_scancode = SDL_SCANCODE_SPACE;
+							break; // Classic Y / Wii Remote A: show remaining time
+
+						case SDL_CONTROLLER_BUTTON_Y:
+							if (is_wii_classic_controller()) {
+								joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+							} else {
+								joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+							}
+							break; // Classic X: special, walk, grab, hang; Wii Remote B: crouch/down
+
+						case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+						case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+							joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+							break; // Classic L/R: crouch/down
+#else
+						case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** A (down) ***/
+						case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** Y (up) ***/
+						case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** X (Shift) ***/
+						case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** B (unused) ***/
+#endif
 
 					case SDL_CONTROLLER_BUTTON_START:
 					case SDL_CONTROLLER_BUTTON_BACK:
@@ -3668,10 +3730,37 @@ void process_events() {
 					case SDL_CONTROLLER_BUTTON_DPAD_UP:    joy_button_states[JOYINPUT_DPAD_UP] &= ~KEYSTATE_HELD; break; // up
 					case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  joy_button_states[JOYINPUT_DPAD_DOWN] &= ~KEYSTATE_HELD; break; // down
 
-					case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD; break; /*** A (down) ***/
-					case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD; break; /*** Y (up) ***/
-					case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD; break; /*** X (Shift) ***/
-					case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] &= ~KEYSTATE_HELD; break; /*** B (unused) ***/
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+						case SDL_CONTROLLER_BUTTON_A:
+							joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD;
+							break;
+
+						case SDL_CONTROLLER_BUTTON_B:
+							joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD;
+							break;
+
+						case SDL_CONTROLLER_BUTTON_X:
+							key_states[SDL_SCANCODE_SPACE] &= ~KEYSTATE_HELD;
+							break;
+
+						case SDL_CONTROLLER_BUTTON_Y:
+							if (is_wii_classic_controller()) {
+								joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD;
+							} else {
+								joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD;
+							}
+							break;
+
+						case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+						case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+							joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD;
+							break;
+#else
+						case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD; break; /*** A (down) ***/
+						case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD; break; /*** Y (up) ***/
+						case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD; break; /*** X (Shift) ***/
+						case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] &= ~KEYSTATE_HELD; break; /*** B (unused) ***/
+#endif
 
 					case SDL_CONTROLLER_BUTTON_START:      joy_button_states[JOYINPUT_START] &= ~KEYSTATE_HELD; break;
 					case SDL_CONTROLLER_BUTTON_BACK:       joy_button_states[JOYINPUT_BACK] &= ~KEYSTATE_HELD; break;

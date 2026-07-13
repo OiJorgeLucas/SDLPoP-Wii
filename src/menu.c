@@ -2159,9 +2159,20 @@ void clear_menu_controls() {
 }
 
 void process_additional_menu_input() {
-	read_mouse_state();
 	have_keyboard_or_controller_input = (menu_control_x || menu_control_y || menu_control_back || pressed_enter);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	// The Wii Remote pointer appears as mouse input in SDL2 Wii.
+	// Disable mouse-style menu input on Wii to avoid cursor trails near the viewport borders.
+	SDL_ShowCursor(SDL_DISABLE);
+	have_mouse_input = 0;
+	mouse_moved = 0;
+	mouse_clicked = 0;
+	mouse_button_clicked_right = 0;
+	menu_control_scroll_y = 0;
+#else
+	read_mouse_state();
 	have_mouse_input = (mouse_moved || mouse_clicked || mouse_button_clicked_right || menu_control_scroll_y);
+#endif
 
 	dword flags = SDL_GetWindowFlags(window_);
 	if (flags & SDL_WINDOW_FULLSCREEN_DESKTOP) {

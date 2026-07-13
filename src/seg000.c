@@ -1386,9 +1386,19 @@ void read_joyst_control() {
 	if (joy_left_stick_states[1] == 1 || joy_right_stick_states[1] == 1 || joy_button_states[JOYINPUT_DPAD_DOWN] & key_state || joy_button_states[JOYINPUT_A] & key_state)
 		control_y = CONTROL_HELD_DOWN;
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (joy_axis_ptr[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > 8000 ||
+			joy_axis_ptr[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > 8000)
+	{
+		control_y = CONTROL_HELD_DOWN;
+	}
+
+	if (joy_button_states[JOYINPUT_X] & key_state)
+#else
 	if (joy_button_states[JOYINPUT_X] & key_state ||
 			joy_axis_ptr[SDL_CONTROLLER_AXIS_TRIGGERLEFT] > 8000 ||
 			joy_axis_ptr[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] > 8000)
+#endif
 	{
 		control_shift = CONTROL_HELD;
 	}

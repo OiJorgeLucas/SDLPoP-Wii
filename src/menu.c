@@ -101,6 +101,9 @@ int drawn_menu;
 byte pause_menu_alpha;
 int current_dialog_box;
 const char* current_dialog_text;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+static bool wii_quit_dialog_opened_from_gameplay;
+#endif
 word menu_current_level = 1;
 bool need_close_menu;
 
@@ -1254,6 +1257,24 @@ void reset_paused_menu(void) {
 	hovering_pause_menu_item = PAUSE_MENU_RESUME;
 }
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+void wii_request_quit_confirmation(void) {
+	/* Home is intentionally ignored outside an active game and during cutscenes. */
+	if (start_level < 0 || is_cutscene || is_ending_sequence || current_dialog_box != DIALOG_NONE) {
+		return;
+	}
+
+	wii_quit_dialog_opened_from_gameplay = !is_menu_shown;
+	if (!is_menu_shown) {
+		is_paused = 1;
+		is_menu_shown = 1;
+	}
+
+	current_dialog_box = DIALOG_CONFIRM_QUIT;
+	current_dialog_text = "Quit SDLPoP?";
+}
+#endif
+
 void pause_menu_clicked(pause_menu_item_type* item) {
 	//printf("Clicked option %s\n", item->text);
 	play_menu_sound(sound_22_loose_shake_3);
@@ -1368,10 +1389,10 @@ void draw_pause_menu(void) {
 	shrink2_rect(&pause_rect_inner, &pause_rect_outer, 5, 5);
 
 	if (!have_mouse_input) {
-		if (menu_control_y == 1) {
+		if (menu_control_y == 1 && next_pause_menu_item != NULL) {
 			play_menu_sound(sound_21_loose_shake_2);
 			hovering_pause_menu_item = next_pause_menu_item->id;
-		} else if (menu_control_y == -1) {
+		} else if (menu_control_y == -1 && previous_pause_menu_item != NULL) {
 			play_menu_sound(sound_21_loose_shake_2);
 			hovering_pause_menu_item = previous_pause_menu_item->id;
 		}
@@ -1835,9 +1856,9 @@ void draw_settings_menu(void) {
 		bool hovering_item_changed = false;
 		if (controlled_area == 0) {
 			int old_hovering_item_id = hovering_pause_menu_item;
-			if (menu_control_y == 1) {
+			if (menu_control_y == 1 && next_pause_menu_item != NULL) {
 				hovering_pause_menu_item = next_pause_menu_item->id;
-			} else if (menu_control_y == -1) {
+			} else if (menu_control_y == -1 && previous_pause_menu_item != NULL) {
 				hovering_pause_menu_item = previous_pause_menu_item->id;
 			}
 			if (old_hovering_item_id != hovering_pause_menu_item) {
@@ -1933,7 +1954,17 @@ void confirmation_dialog_result(int which_dialog, int button) {
 		}
 	} else {
 		play_menu_sound(sound_22_loose_shake_3);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		if (which_dialog == DIALOG_CONFIRM_QUIT && wii_quit_dialog_opened_from_gameplay) {
+			need_close_menu = true;
+		}
+#endif
 	}
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (which_dialog == DIALOG_CONFIRM_QUIT) {
+		wii_quit_dialog_opened_from_gameplay = false;
+	}
+#endif
 }
 
 rect_type cancel_text_rect = {104, 162,  118,  212};
@@ -2240,6 +2271,7 @@ int key_test_paused_menu(int key) {
 			}
 		}
 
+#if !defined(__WII__) && !defined(HW_RVL) && !defined(GEKKO)
 		if (!(joy_button_states[JOYINPUT_A] & KEYSTATE_HELD) && !(joy_button_states[JOYINPUT_Y] & KEYSTATE_HELD) && !(joy_button_states[JOYINPUT_B] & KEYSTATE_HELD)) {
 			joy_ABXY_buttons_released = true;
 		} else if (joy_ABXY_buttons_released) {
@@ -2251,6 +2283,7 @@ int key_test_paused_menu(int key) {
 				key = SDL_SCANCODE_ESCAPE;
 			}
 		}
+#endif
 	}
 
 	// remap

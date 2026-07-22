@@ -722,6 +722,9 @@ void process_additional_menu_input(void);
 int key_test_paused_menu(int key);
 void load_ingame_settings(void);
 void menu_was_closed(void);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+void wii_request_quit_confirmation(void);
+#endif
 #endif
 
 // midi.c

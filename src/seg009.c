@@ -19,6 +19,9 @@ The authors of this program may be contacted at https://forum.princed.org
 */
 
 #include "common.h"
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#include "wii_input.h"
+#endif
 #include <string.h>
 #include <time.h>
 #include <errno.h>
@@ -972,6 +975,24 @@ void draw_image_transp(image_type* image,image_type* mask,int xpos,int ypos) {
 // seg009:157E
 int set_joy_mode() {
 	// stub
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (gamecontrollerdb_file[0] != '\0') {
+		SDL_GameControllerAddMappingsFromFile(gamecontrollerdb_file);
+	}
+
+	int controller_index = wii_input_find_controller_index();
+	if (controller_index < 0) {
+		is_joyst_mode = 0;
+	} else {
+		sdl_controller_ = SDL_GameControllerOpen(controller_index);
+		if (sdl_controller_ == NULL) {
+			is_joyst_mode = 0;
+		} else {
+			is_joyst_mode = 1;
+			using_sdl_joystick_interface = 0;
+		}
+	}
+#else
 	if (SDL_NumJoysticks() < 1) {
 		is_joyst_mode = 0;
 	} else {
@@ -995,6 +1016,7 @@ int set_joy_mode() {
 			using_sdl_joystick_interface = 1;
 		}
 	}
+#endif
 	if (enable_controller_rumble && is_joyst_mode) {
 		sdl_haptic = SDL_HapticOpen(0);
 		if (sdl_haptic != NULL) {
@@ -2593,6 +2615,17 @@ void set_gr_mode(byte grmode) {
 		sdlperror("set_gr_mode: SDL_Init");
 		quit(1);
 	}
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/* SDL's Wii backend also emits mouse events for Wii Remote buttons.
+	 * SDLPoP uses the GameController events instead, so disable the duplicate
+	 * mouse path completely on Wii. */
+	SDL_EventState(SDL_MOUSEMOTION, SDL_IGNORE);
+	SDL_EventState(SDL_MOUSEBUTTONDOWN, SDL_IGNORE);
+	SDL_EventState(SDL_MOUSEBUTTONUP, SDL_IGNORE);
+	SDL_EventState(SDL_MOUSEWHEEL, SDL_IGNORE);
+	SDL_FlushEvents(SDL_MOUSEMOTION, SDL_MOUSEWHEEL);
+	SDL_ShowCursor(SDL_DISABLE);
+#endif
 	if (enable_controller_rumble) {
 		if (SDL_InitSubSystem(SDL_INIT_HAPTIC) != 0) {
 			printf("Warning: Haptic subsystem unavailable, ignoring enable_controller_rumble = true\n");
@@ -3477,22 +3510,58 @@ void toggle_fullscreen(void) {
 #endif
 }
 
-static bool is_wii_classic_controller(void) {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-	if (sdl_controller_ == NULL) {
-		return false;
-	}
+static void set_wii_gameplay_action(wii_gameplay_action action, bool pressed) {
+	int state_bits = KEYSTATE_HELD | KEYSTATE_HELD_NEW;
 
-#if SDL_VERSION_ATLEAST(2, 0, 14)
-	return SDL_GameControllerHasButton(sdl_controller_, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ||
-		SDL_GameControllerHasButton(sdl_controller_, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER);
-#else
-	return false;
-#endif
-#else
-	return false;
-#endif
+	switch (action) {
+		case WII_GAMEPLAY_ACTION_JUMP:
+			if (pressed) joy_button_states[JOYINPUT_Y] |= state_bits;
+			else joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD;
+			break;
+
+		case WII_GAMEPLAY_ACTION_SHIFT:
+			if (pressed) joy_button_states[JOYINPUT_X] |= state_bits;
+			else joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD;
+			break;
+
+		case WII_GAMEPLAY_ACTION_TIME:
+			if (pressed) {
+				key_states[SDL_SCANCODE_SPACE] |= state_bits;
+				last_key_scancode = SDL_SCANCODE_SPACE;
+			} else {
+				key_states[SDL_SCANCODE_SPACE] &= ~KEYSTATE_HELD;
+			}
+			break;
+
+		case WII_GAMEPLAY_ACTION_CROUCH:
+			if (pressed) joy_button_states[JOYINPUT_A] |= state_bits;
+			else joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD;
+			break;
+
+		default:
+			break;
+	}
 }
+
+static void clear_wii_controller_state(void) {
+	memset(joy_axis, 0, sizeof(joy_axis));
+	memset(joy_axis_max, 0, sizeof(joy_axis_max));
+	memset(joy_button_states, 0, sizeof(joy_button_states));
+	memset(joy_left_stick_states, 0, sizeof(joy_left_stick_states));
+	memset(joy_right_stick_states, 0, sizeof(joy_right_stick_states));
+	key_states[SDL_SCANCODE_SPACE] &= ~KEYSTATE_HELD;
+}
+
+static void activate_wii_controller(SDL_GameController* controller) {
+	sdl_controller_ = controller;
+	is_joyst_mode = (controller != NULL);
+	is_keyboard_mode = !is_joyst_mode;
+	using_sdl_joystick_interface = 0;
+	clear_wii_controller_state();
+}
+
+#endif
 
 bool ignore_tab = false;
 
@@ -3628,6 +3697,11 @@ void process_events() {
 #endif
 				break;
 			case SDL_CONTROLLERAXISMOTION:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			{
+				SDL_GameController* event_controller = SDL_GameControllerFromInstanceID(event.caxis.which);
+				if (!wii_input_is_supported_controller(event_controller)) break;
+#endif
 				if (event.caxis.axis < 6) {
 					joy_axis[event.caxis.axis] = event.caxis.value;
 					if (abs(event.caxis.value) > abs(joy_axis_max[event.caxis.axis]))
@@ -3640,8 +3714,37 @@ void process_events() {
 					}
 #endif
 				}
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			}
+#endif
 				break;
 			case SDL_CONTROLLERDEVICEADDED:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			{
+				if (!wii_input_is_supported_controller_index(event.cdevice.which)) break;
+
+				SDL_GameController* added_controller = NULL;
+				SDL_JoystickID added_instance = SDL_JoystickGetDeviceInstanceID(event.cdevice.which);
+				if (sdl_controller_ != NULL) {
+					SDL_Joystick* active_joystick = SDL_GameControllerGetJoystick(sdl_controller_);
+					if (active_joystick != NULL && SDL_JoystickInstanceID(active_joystick) == added_instance) {
+						added_controller = sdl_controller_;
+					}
+				}
+
+				if (added_controller == NULL) {
+					added_controller = SDL_GameControllerOpen(event.cdevice.which);
+					if (added_controller != NULL) {
+						if (sdl_controller_ != NULL && sdl_controller_ != added_controller) {
+							SDL_GameControllerClose(sdl_controller_);
+						}
+						activate_wii_controller(added_controller);
+					}
+				}
+
+				break;
+			}
+#else
 				SDL_GameControllerOpen(event.cdevice.which);
 				if (gamecontrollerdb_file[0] != '\0') {
 					SDL_GameControllerAddMappingsFromFile(gamecontrollerdb_file);
@@ -3649,7 +3752,27 @@ void process_events() {
 				is_joyst_mode = 1;
 				using_sdl_joystick_interface = 0;
 				break;
+#endif
 			case SDL_CONTROLLERDEVICEREMOVED:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			{
+				SDL_GameController* removed_controller = SDL_GameControllerFromInstanceID(event.cdevice.which);
+				SDL_GameController* controller_to_close = removed_controller;
+				bool removed_active_controller = false;
+
+				if (sdl_controller_ != NULL) {
+					SDL_Joystick* active_joystick = SDL_GameControllerGetJoystick(sdl_controller_);
+					if (active_joystick != NULL && SDL_JoystickInstanceID(active_joystick) == event.cdevice.which) {
+						removed_active_controller = true;
+						controller_to_close = sdl_controller_;
+					}
+				}
+
+				if (removed_active_controller) activate_wii_controller(NULL);
+				if (controller_to_close != NULL) SDL_GameControllerClose(controller_to_close);
+				break;
+			}
+#else
 				if (sdl_controller_ == SDL_GameControllerFromInstanceID(event.cdevice.which)) {
 					sdl_controller_ = NULL;
 					is_joyst_mode = 0;
@@ -3657,14 +3780,55 @@ void process_events() {
 				}
 				SDL_GameControllerClose(SDL_GameControllerFromInstanceID(event.cdevice.which));
 				break;
+#endif
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			case SDL_CONTROLLERDEVICEREMAPPED:
+			{
+				SDL_GameController* remapped_controller = SDL_GameControllerFromInstanceID(event.cdevice.which);
+				if (wii_input_is_supported_controller(remapped_controller)) {
+					activate_wii_controller(remapped_controller);
+				}
+				break;
+			}
+#endif
 			case SDL_CONTROLLERBUTTONDOWN:
-				//Make sure sdl_controller_ always points to the active controller
-				sdl_controller_ = SDL_GameControllerFromInstanceID(event.cdevice.which);
+			{
+				// Make sure sdl_controller_ always points to the active controller.
+				SDL_GameController* event_controller = SDL_GameControllerFromInstanceID(event.cbutton.which);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				if (!wii_input_is_supported_controller(event_controller)) break;
+#else
+				if (event_controller == NULL) event_controller = sdl_controller_;
+#endif
+				sdl_controller_ = event_controller;
 #ifdef USE_AUTO_INPUT_MODE
 				if (!is_joyst_mode) {
 					is_joyst_mode = 1;
 					is_keyboard_mode = 0;
 				}
+#endif
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				wii_controller_kind controller_kind = wii_input_get_controller_kind(event_controller);
+
+				/* Home opens the existing quit confirmation during an active game.
+				 * It is consumed even when confirmation is unavailable, so it never
+				 * behaves like the pause/menu button. */
+				if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+#ifdef USE_MENU
+					wii_request_quit_confirmation();
+#endif
+					break;
+				}
+
+#ifdef USE_MENU
+				/* Keep the original D-pad and analog menu processing. Only face
+				 * buttons are translated here to avoid leaking gameplay actions. */
+				if (is_menu_shown && wii_input_is_face_button(event.cbutton.button)) {
+					SDL_Scancode menu_scancode = wii_input_get_menu_scancode(controller_kind, event.cbutton.button);
+					if (menu_scancode != SDL_SCANCODE_UNKNOWN) last_key_scancode = menu_scancode;
+					break;
+				}
+#endif
 #endif
 				switch (event.cbutton.button)
 				{
@@ -3674,36 +3838,25 @@ void process_events() {
 					case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  joy_button_states[JOYINPUT_DPAD_DOWN] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; // down
 
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-						case SDL_CONTROLLER_BUTTON_A:
-							joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-							break; // Classic B / Wii Remote 2: jump
+					case SDL_CONTROLLER_BUTTON_A:
+					case SDL_CONTROLLER_BUTTON_B:
+					case SDL_CONTROLLER_BUTTON_X:
+					case SDL_CONTROLLER_BUTTON_Y:
+						set_wii_gameplay_action(
+							wii_input_get_gameplay_action(controller_kind, event.cbutton.button),
+							true
+						);
+						break;
 
-						case SDL_CONTROLLER_BUTTON_B:
-							joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-							break; // Classic A / Wii Remote 1: special, walk, grab, hang
-
-						case SDL_CONTROLLER_BUTTON_X:
-							key_states[SDL_SCANCODE_SPACE] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-							last_key_scancode = SDL_SCANCODE_SPACE;
-							break; // Classic Y / Wii Remote A: show remaining time
-
-						case SDL_CONTROLLER_BUTTON_Y:
-							if (is_wii_classic_controller()) {
-								joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-							} else {
-								joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-							}
-							break; // Classic X: special, walk, grab, hang; Wii Remote B: crouch/down
-
-						case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
-						case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
-							joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-							break; // Classic L/R: crouch/down
+					case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+					case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+						joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
+						break; // Classic L/R: crouch/down
 #else
-						case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** A (down) ***/
-						case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** Y (up) ***/
-						case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** X (Shift) ***/
-						case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** B (unused) ***/
+					case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** A (down) ***/
+					case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** Y (up) ***/
+					case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** X (Shift) ***/
+					case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** B (unused) ***/
 #endif
 
 					case SDL_CONTROLLER_BUTTON_START:
@@ -3722,7 +3875,14 @@ void process_events() {
 					default: break;
 				}
 				break;
+			}
 			case SDL_CONTROLLERBUTTONUP:
+			{
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				SDL_GameController* event_controller = SDL_GameControllerFromInstanceID(event.cbutton.which);
+				if (!wii_input_is_supported_controller(event_controller)) break;
+				wii_controller_kind controller_kind = wii_input_get_controller_kind(event_controller);
+#endif
 				switch (event.cbutton.button)
 				{
 					case SDL_CONTROLLER_BUTTON_DPAD_LEFT:  joy_button_states[JOYINPUT_DPAD_LEFT] &= ~KEYSTATE_HELD; break; // left
@@ -3731,35 +3891,25 @@ void process_events() {
 					case SDL_CONTROLLER_BUTTON_DPAD_DOWN:  joy_button_states[JOYINPUT_DPAD_DOWN] &= ~KEYSTATE_HELD; break; // down
 
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-						case SDL_CONTROLLER_BUTTON_A:
-							joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD;
-							break;
+					case SDL_CONTROLLER_BUTTON_A:
+					case SDL_CONTROLLER_BUTTON_B:
+					case SDL_CONTROLLER_BUTTON_X:
+					case SDL_CONTROLLER_BUTTON_Y:
+						set_wii_gameplay_action(
+							wii_input_get_gameplay_action(controller_kind, event.cbutton.button),
+							false
+						);
+						break;
 
-						case SDL_CONTROLLER_BUTTON_B:
-							joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD;
-							break;
-
-						case SDL_CONTROLLER_BUTTON_X:
-							key_states[SDL_SCANCODE_SPACE] &= ~KEYSTATE_HELD;
-							break;
-
-						case SDL_CONTROLLER_BUTTON_Y:
-							if (is_wii_classic_controller()) {
-								joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD;
-							} else {
-								joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD;
-							}
-							break;
-
-						case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
-						case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
-							joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD;
-							break;
+					case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+					case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+						joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD;
+						break;
 #else
-						case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD; break; /*** A (down) ***/
-						case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD; break; /*** Y (up) ***/
-						case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD; break; /*** X (Shift) ***/
-						case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] &= ~KEYSTATE_HELD; break; /*** B (unused) ***/
+					case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] &= ~KEYSTATE_HELD; break; /*** A (down) ***/
+					case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] &= ~KEYSTATE_HELD; break; /*** Y (up) ***/
+					case SDL_CONTROLLER_BUTTON_X:          joy_button_states[JOYINPUT_X] &= ~KEYSTATE_HELD; break; /*** X (Shift) ***/
+					case SDL_CONTROLLER_BUTTON_B:          joy_button_states[JOYINPUT_B] &= ~KEYSTATE_HELD; break; /*** B (unused) ***/
 #endif
 
 					case SDL_CONTROLLER_BUTTON_START:      joy_button_states[JOYINPUT_START] &= ~KEYSTATE_HELD; break;
@@ -3768,6 +3918,7 @@ void process_events() {
 					default: break;
 				}
 				break;
+			}
 			case SDL_JOYBUTTONDOWN:
 			case SDL_JOYBUTTONUP:
 			case SDL_JOYAXISMOTION:
@@ -3884,6 +4035,9 @@ void process_events() {
 				break;
 #ifdef USE_MENU
 			case SDL_MOUSEBUTTONDOWN:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				break;
+#else
 				switch(event.button.button) {
 					case SDL_BUTTON_LEFT:
 						if (!is_menu_shown) {
@@ -3900,11 +4054,16 @@ void process_events() {
 				}
 
 				break;
+#endif
 			case SDL_MOUSEWHEEL:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				break;
+#else
 				if (is_menu_shown) {
 					menu_control_scroll_y = -event.wheel.y;
 				}
 				break;
+#endif
 #endif
 			case SDL_QUIT:
 #ifdef USE_MENU

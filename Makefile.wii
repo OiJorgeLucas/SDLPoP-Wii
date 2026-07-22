@@ -29,6 +29,7 @@ SRC := \
 	src/seg007.c \
 	src/seg008.c \
 	src/seg009.c \
+	src/wii_input.c \
 	src/seqtbl.c \
 	src/replay.c \
 	src/options.c \

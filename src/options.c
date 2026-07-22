@@ -484,7 +484,11 @@ void set_options_to_default() {
 	use_integer_scaling = 0;
 	scaling_type = 0;
 	enable_controller_rumble = 1;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	joystick_only_horizontal = 0;
+#else
 	joystick_only_horizontal = 1;
+#endif
 	joystick_threshold = 8000;
 	enable_quicksave = 1;
 	enable_quicksave_penalty = 1;

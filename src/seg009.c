@@ -2661,8 +2661,6 @@ void set_gr_mode(byte grmode) {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 	// Wii fullscreen defaults for console builds.
 	start_fullscreen = 1;
-	use_correct_aspect_ratio = 0;
-	use_integer_scaling = 0;
 	pop_window_width = 640;
 	pop_window_height = 480;
 	flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;

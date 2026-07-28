@@ -2465,17 +2465,22 @@ void save_ingame_settings(void) {
 }
 
 void load_ingame_settings(void) {
-	// We want the SDLPoP.cfg file (in-game menu settings) to override the SDLPoP.ini file,
-	// but ONLY if the .ini file wasn't modified since the last time the .cfg file was saved!
-	struct stat st_ini, st_cfg;
 	const char* cfg_filename = locate_file("SDLPoP.cfg");
+
+#if !defined(__WII__) && !defined(HW_RVL) && !defined(GEKKO)
+	// On desktop platforms, ignore SDLPoP.cfg when SDLPoP.ini is newer.
+	// On Wii, filesystem timestamps are unreliable because the console's
+	// clock may be incorrect after being disconnected from power.
+	struct stat st_ini, st_cfg;
 	const char* ini_filename = locate_file("SDLPoP.ini");
-	if (stat( cfg_filename, &st_cfg ) == 0 && stat( ini_filename, &st_ini ) == 0) {
-		if (st_ini.st_mtime > st_cfg.st_mtime ) {
-			// SDLPoP.ini is newer than SDLPoP.cfg, so just go with the .ini configuration
+
+	if (stat(cfg_filename, &st_cfg) == 0 && stat(ini_filename, &st_ini) == 0) {
+		if (st_ini.st_mtime > st_cfg.st_mtime) {
+			// SDLPoP.ini is newer than SDLPoP.cfg, so use the INI configuration.
 			return;
 		}
 	}
+#endif
 	// If there is a SDLPoP.cfg file, let it override the settings
 	SDL_RWops* rw = SDL_RWFromFile(cfg_filename, "rb");
 	if (rw != NULL) {

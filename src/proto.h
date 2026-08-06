@@ -565,6 +565,9 @@ dat_type *open_dat(const char* file, int optional);
 void set_loaded_palette(dat_pal_type *palette_ptr);
 chtab_type* load_sprites_from_file(int resource,int palette_bits, int quit_on_error);
 void free_chtab(chtab_type *chtab_ptr);
+#if defined(USE_TEXT) && (defined(__WII__) || defined(HW_RVL) || defined(GEKKO))
+void load_wii_mod_font(void);
+#endif
 image_type* decode_image(image_data_type* image_data, dat_pal_type* palette);
 image_type*load_image(int index, dat_pal_type* palette);
 void draw_image_transp(image_type* image,image_type* mask,int xpos,int ypos);

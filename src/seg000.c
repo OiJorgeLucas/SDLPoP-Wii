@@ -93,6 +93,14 @@ void pop_main() {
 
 	load_mod_options();
 
+#if defined(USE_TEXT) && (defined(__WII__) || defined(HW_RVL) || defined(GEKKO))
+	/*
+	 * The Wii starts with the built-in font to avoid loading many small PNGs.
+	 * Now that mod_data_path is known, let an active mod replace that font.
+	 */
+	load_wii_mod_font();
+#endif
+
 	// CusPop option
 	is_blind_mode = custom->start_in_blind_mode;
 	// Fix bug: with start_in_blind_mode enabled, moving objects are not displayed until blind mode is toggled off+on??
@@ -391,11 +399,22 @@ int quick_save(void) {
 	return ok;
 }
 
-void restore_room_after_quick_load() {
+static void restore_room_after_quick_load_internal(bool reuse_level_resources) {
 	int temp1 = curr_guard_color;
 	int temp2 = next_level;
 	reset_level_unused_fields(false);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/*
+	 * A quickload in the currently displayed level can reuse the environment,
+	 * guard, wall and optional graphics that are already in memory.
+	 */
+	if (!reuse_level_resources) {
+		load_lev_spr(current_level);
+	}
+#else
+	(void)reuse_level_resources;
 	load_lev_spr(current_level);
+#endif
 	curr_guard_color = temp1;
 	next_level = temp2;
 
@@ -432,6 +451,10 @@ void restore_room_after_quick_load() {
 	exit_room_timer = 0;
 }
 
+void restore_room_after_quick_load(void) {
+	restore_room_after_quick_load_internal(false);
+}
+
 int quick_load(void) {
 	int ok = 0;
 	char custom_quick_path[POP_MAX_PATH];
@@ -454,11 +477,21 @@ int quick_load(void) {
 		short old_rem_min = rem_min;
 		word old_rem_tick = rem_tick;
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		/* Remember which level owns the graphics currently in memory. */
+		int resources_level = current_level;
+#endif
+
 		ok = quick_process(process_load);
 		fclose(quick_fp);
 		quick_fp = NULL;
 
-		restore_room_after_quick_load();
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		bool reuse_level_resources = ok && current_level == resources_level;
+#else
+		bool reuse_level_resources = false;
+#endif
+		restore_room_after_quick_load_internal(reuse_level_resources);
 		update_screen();
 
 		#ifdef USE_QUICKLOAD_PENALTY

@@ -1249,7 +1249,14 @@ font_type load_font_from_data(/*const*/ rawfont_type* data) {
 	if (SDL_SwapLE16(data->offsets[0]) == 0) {
 		load_font_character_offsets(data);
 	}
-	chtab_type* chtab = malloc(sizeof(chtab_type) + sizeof(image_type*) * n_chars);
+	size_t alloc_size = sizeof(chtab_type) + sizeof(image_type*) * n_chars;
+	chtab_type* chtab = malloc(alloc_size);
+	if (chtab == NULL) {
+		fprintf(stderr, "load_font_from_data: Could not allocate font table.\n");
+		quit(1);
+	}
+	memset(chtab, 0, alloc_size);
+	chtab->n_images = n_chars;
 	// Make a dummy palette for decode_image().
 	dat_pal_type dat_pal;
 	memset(&dat_pal, 0, sizeof(dat_pal));
@@ -1273,6 +1280,13 @@ font_type load_font_from_data(/*const*/ rawfont_type* data) {
 extern byte hc_small_font_data[];
 
 void load_font(void) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/*
+	 * Loading data/font means opening roughly one hundred small PNG files on
+	 * the Wii SD card. Use the built-in font immediately instead.
+	 */
+	hc_font = load_font_from_data((/*const*/ rawfont_type*)hc_font_data);
+#else
 	// Try to load font from a file.
 	dat_type* dathandle = open_dat("font", 1);
 	hc_font.chtab = load_sprites_from_file(1000, 1<<1, 0);
@@ -1281,12 +1295,41 @@ void load_font(void) {
 		// Use built-in font.
 		hc_font = load_font_from_data((/*const*/ rawfont_type*)hc_font_data);
 	}
+#endif
 
 #ifdef USE_MENU
 	hc_small_font = load_font_from_data((rawfont_type*)hc_small_font_data);
 #endif
-
 }
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+void load_wii_mod_font(void) {
+	if (!use_custom_levelset || mod_data_path[0] == '\0') {
+		return;
+	}
+
+	/*
+	 * Search only inside the active mod. open_dat() and the normal resource
+	 * loader still support both a mod font DAT and mods/MOD/data/font/.
+	 */
+	bool previous_skip_mod_data_files = skip_mod_data_files;
+	bool previous_skip_normal_data_files = skip_normal_data_files;
+	skip_mod_data_files = false;
+	skip_normal_data_files = true;
+
+	dat_type* dathandle = open_dat("font", 1);
+	chtab_type* mod_font_chtab = load_sprites_from_file(1000, 1 << 1, 0);
+	close_dat(dathandle);
+
+	skip_mod_data_files = previous_skip_mod_data_files;
+	skip_normal_data_files = previous_skip_normal_data_files;
+
+	if (mod_font_chtab != NULL) {
+		free_chtab(hc_font.chtab);
+		hc_font.chtab = mod_font_chtab;
+	}
+}
+#endif
 
 // seg009:35C5
 int get_char_width(byte character) {

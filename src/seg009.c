@@ -3224,6 +3224,15 @@ bool RGB24_bug_checked = false;
 bool RGB24_bug_affected;
 
 bool RGB24_bug_check(void) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/*
+	 * Wii uses a modern SDL2 where the pre-2.0.4 RGB24 FillRect bug is fixed.
+	 * The legacy runtime detector reads a 24-bit pixel through a Uint32 pointer,
+	 * which is unreliable on the Wii's big-endian PowerPC and can report a
+	 * false positive, causing an unnecessary red/blue swap.
+	 */
+	return false;
+#else
 	if (!RGB24_bug_checked) {
 		// Check if the bug occurs in this version of SDL.
 		SDL_Surface* test_surface = SDL_CreateRGBSurface(0, 1, 1, 24, 0, 0, 0, 0);
@@ -3238,6 +3247,7 @@ bool RGB24_bug_check(void) {
 		RGB24_bug_checked = true;
 	}
 	return RGB24_bug_affected;
+#endif
 }
 
 int safe_SDL_FillRect(SDL_Surface* dst, const SDL_Rect* rect, Uint32 color) {

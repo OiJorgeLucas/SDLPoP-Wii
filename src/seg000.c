@@ -159,6 +159,24 @@ void pop_main() {
 
 byte* level_var_palettes;
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#define WII_ENVIRONMENT_CACHE_COUNT 2
+#define WII_ENVIRONMENT_PALETTE_COLORS 16
+
+typedef struct wii_environment_cache_type {
+	chtab_type* environment;
+	chtab_type* wall;
+	rgb_type environment_palette[WII_ENVIRONMENT_PALETTE_COLORS];
+	rgb_type wall_palette[WII_ENVIRONMENT_PALETTE_COLORS];
+	bool loaded;
+} wii_environment_cache_type;
+
+static wii_environment_cache_type wii_environment_cache[WII_ENVIRONMENT_CACHE_COUNT];
+
+static bool wii_is_cached_environment_chtab(const chtab_type* chtab);
+static void wii_preload_original_environments(void);
+#endif
+
 // seg000:024F
 void init_game_main() {
 	doorlink1_ad = /*&*/level.doorlinks1;
@@ -180,6 +198,9 @@ void init_game_main() {
 	// PRINCE.DAT: flame, sword on floor, potion
 	chtab_addrs[id_chtab_1_flameswordpotion] = load_sprites_from_file(150, 1<<3, 1);
 	close_dat(dathandle);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_preload_original_environments();
+#endif
 #ifdef USE_LIGHTING
 	init_lighting();
 #endif
@@ -1126,6 +1147,207 @@ const char*const tbl_guard_dat[] = {"GUARD.DAT", "FAT.DAT", "SKEL.DAT", "VIZIER.
 const char*const tbl_envir_gr[] = {"", "C", "C", "E", "E", "V"};
 // data:03D0
 const char*const tbl_envir_ki[] = {"DUNGEON", "PALACE"};
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+static bool wii_can_use_original_environment_cache(void) {
+	return !use_custom_levelset && graphics_mode == gmMcgaVga;
+}
+
+static bool wii_is_cached_environment_chtab(const chtab_type* chtab) {
+	if (chtab == NULL) return false;
+
+	for (int index = 0; index < WII_ENVIRONMENT_CACHE_COUNT; ++index) {
+		if (chtab == wii_environment_cache[index].environment ||
+			chtab == wii_environment_cache[index].wall) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void wii_detach_cached_environment(void) {
+	if (wii_is_cached_environment_chtab(chtab_addrs[id_chtab_6_environment])) {
+		chtab_addrs[id_chtab_6_environment] = NULL;
+	}
+	if (wii_is_cached_environment_chtab(chtab_addrs[id_chtab_7_environmentwall])) {
+		chtab_addrs[id_chtab_7_environmentwall] = NULL;
+	}
+}
+
+static void wii_release_environment_cache_entry(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) {
+		return;
+	}
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+
+	if (chtab_addrs[id_chtab_6_environment] == entry->environment) {
+		chtab_addrs[id_chtab_6_environment] = NULL;
+	}
+	if (chtab_addrs[id_chtab_7_environmentwall] == entry->wall) {
+		chtab_addrs[id_chtab_7_environmentwall] = NULL;
+	}
+
+	if (entry->environment != NULL) {
+		free_chtab(entry->environment);
+	}
+	if (entry->wall != NULL) {
+		free_chtab(entry->wall);
+	}
+
+	memset(entry, 0, sizeof(*entry));
+}
+
+static bool wii_load_environment_base_palettes(
+	const char* filename,
+	wii_environment_cache_type* entry
+) {
+	if (filename == NULL || entry == NULL) return false;
+
+	dat_type* dathandle = open_dat(filename, 'G');
+	int environment_palette_size = 0;
+	int wall_palette_size = 0;
+	dat_shpl_type* environment_palette = (dat_shpl_type*) load_from_opendats_alloc(
+		200, "pal", NULL, &environment_palette_size);
+	dat_shpl_type* wall_palette = (dat_shpl_type*) load_from_opendats_alloc(
+		360, "pal", NULL, &wall_palette_size);
+
+	bool valid = environment_palette != NULL && wall_palette != NULL &&
+		environment_palette_size >= (int)sizeof(dat_shpl_type) &&
+		wall_palette_size >= (int)sizeof(dat_shpl_type) &&
+		environment_palette->palette.n_colors >= WII_ENVIRONMENT_PALETTE_COLORS &&
+		wall_palette->palette.n_colors >= WII_ENVIRONMENT_PALETTE_COLORS;
+
+	if (valid) {
+		memcpy(entry->environment_palette, environment_palette->palette.vga,
+			sizeof(entry->environment_palette));
+		memcpy(entry->wall_palette, wall_palette->palette.vga,
+			sizeof(entry->wall_palette));
+	}
+
+	if (environment_palette != NULL) free(environment_palette);
+	if (wall_palette != NULL) free(wall_palette);
+	close_dat(dathandle);
+
+	return valid;
+}
+
+static bool wii_load_environment_cache_entry(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) {
+		return false;
+	}
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	if (entry->loaded) return true;
+
+	/* Loading helpers use the global slots temporarily. */
+	wii_detach_cached_environment();
+	if (chtab_addrs[id_chtab_6_environment] != NULL ||
+		chtab_addrs[id_chtab_7_environmentwall] != NULL) {
+		return false;
+	}
+
+	char filename[20];
+	snprintf(filename, sizeof(filename), "%s%s.DAT",
+		tbl_envir_gr[graphics_mode], tbl_envir_ki[environment_type]);
+
+	load_chtab_from_file(id_chtab_6_environment, 200, filename, 1 << 5);
+	load_more_opt_graf(filename);
+	load_chtab_from_file(id_chtab_7_environmentwall, 360, filename, 1 << 6);
+
+	chtab_type* environment = chtab_addrs[id_chtab_6_environment];
+	chtab_type* wall = chtab_addrs[id_chtab_7_environmentwall];
+
+	if (environment == NULL || wall == NULL) {
+		if (environment != NULL) free_chtab(environment);
+		if (wall != NULL) free_chtab(wall);
+		chtab_addrs[id_chtab_6_environment] = NULL;
+		chtab_addrs[id_chtab_7_environmentwall] = NULL;
+		memset(entry, 0, sizeof(*entry));
+		return false;
+	}
+
+	if (!wii_load_environment_base_palettes(filename, entry)) {
+		free_chtab(environment);
+		free_chtab(wall);
+		chtab_addrs[id_chtab_6_environment] = NULL;
+		chtab_addrs[id_chtab_7_environmentwall] = NULL;
+		memset(entry, 0, sizeof(*entry));
+		return false;
+	}
+
+	entry->environment = environment;
+	entry->wall = wall;
+	entry->loaded = true;
+
+	chtab_addrs[id_chtab_6_environment] = NULL;
+	chtab_addrs[id_chtab_7_environmentwall] = NULL;
+	return true;
+}
+
+static void wii_apply_cached_environment_palette(
+	wii_environment_cache_type* entry,
+	int environment_type,
+	int level_color
+) {
+	set_pal_arr(0x50, WII_ENVIRONMENT_PALETTE_COLORS, entry->environment_palette);
+	set_pal_arr(0x60, WII_ENVIRONMENT_PALETTE_COLORS, entry->wall_palette);
+	set_chtab_palette(entry->environment, (byte*)entry->environment_palette,
+		WII_ENVIRONMENT_PALETTE_COLORS);
+	set_chtab_palette(entry->wall, (byte*)entry->wall_palette,
+		WII_ENVIRONMENT_PALETTE_COLORS);
+
+	if (level_color != 0 && level_var_palettes != NULL) {
+		byte* env_pal = level_var_palettes + 0x30 * (level_color - 1);
+		byte* wall_pal = env_pal + 0x30 * environment_type;
+		set_pal_arr(0x50, WII_ENVIRONMENT_PALETTE_COLORS, (rgb_type*)env_pal);
+		set_pal_arr(0x60, WII_ENVIRONMENT_PALETTE_COLORS, (rgb_type*)wall_pal);
+		set_chtab_palette(entry->environment, env_pal, WII_ENVIRONMENT_PALETTE_COLORS);
+		set_chtab_palette(entry->wall, wall_pal, WII_ENVIRONMENT_PALETTE_COLORS);
+	}
+}
+
+static bool wii_activate_cached_environment(int environment_type, int level_color) {
+	if (!wii_can_use_original_environment_cache() ||
+		environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) {
+		return false;
+	}
+
+	if (!wii_load_environment_cache_entry(environment_type)) {
+		return false;
+	}
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	chtab_addrs[id_chtab_6_environment] = entry->environment;
+	chtab_addrs[id_chtab_7_environmentwall] = entry->wall;
+	wii_apply_cached_environment_palette(entry, environment_type, level_color);
+	return true;
+}
+
+static void wii_preload_original_environments(void) {
+	if (!wii_can_use_original_environment_cache()) return;
+
+	/* Load both original environment sets while the first Loading screen is visible. */
+	for (int environment_type = 0;
+		environment_type < WII_ENVIRONMENT_CACHE_COUNT;
+		++environment_type) {
+		if (!wii_load_environment_cache_entry(environment_type)) {
+			break;
+		}
+	}
+	wii_detach_cached_environment();
+}
+
+void free_wii_environment_cache(void) {
+	wii_detach_cached_environment();
+	for (int environment_type = 0;
+		environment_type < WII_ENVIRONMENT_CACHE_COUNT;
+		++environment_type) {
+		wii_release_environment_cache_entry(environment_type);
+	}
+}
+#endif
 // seg000:0D20
 void load_lev_spr(int level) {
 	dat_type* dathandle;
@@ -1135,16 +1357,29 @@ void load_lev_spr(int level) {
 	current_level = next_level = level;
 	draw_rect(&screen_rect, color_0_black);
 	free_optsnd_chtab();
+
+	int environment_type = custom->tbl_level_type[current_level];
+	int level_color = custom->tbl_level_color[current_level];
+	bool environment_from_cache = false;
+
 	snprintf(filename, sizeof(filename), "%s%s.DAT",
 		tbl_envir_gr[graphics_mode],
-		tbl_envir_ki[custom->tbl_level_type[current_level]]
+		tbl_envir_ki[environment_type]
 	);
-	load_chtab_from_file(id_chtab_6_environment, 200, filename, 1<<5);
-	load_more_opt_graf(filename);
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	environment_from_cache = wii_activate_cached_environment(environment_type, level_color);
+#endif
+
+	if (!environment_from_cache) {
+		load_chtab_from_file(id_chtab_6_environment, 200, filename, 1<<5);
+		load_more_opt_graf(filename);
+	}
+
 	guardtype = custom->tbl_guard_type[current_level];
 	if (guardtype != -1) {
 		if (guardtype == 0) {
-			dathandle = open_dat(custom->tbl_level_type[current_level] ? "GUARD1.DAT" : "GUARD2.DAT", 'G');
+			dathandle = open_dat(environment_type ? "GUARD1.DAT" : "GUARD2.DAT", 'G');
 		}
 		load_chtab_from_file(id_chtab_5_guard, 750, tbl_guard_dat[guardtype], 1<<8);
 		if (dathandle) {
@@ -1152,18 +1387,20 @@ void load_lev_spr(int level) {
 		}
 	}
 	curr_guard_color = 0;
-	load_chtab_from_file(id_chtab_7_environmentwall, 360, filename, 1<<6);
 
-	// Level colors (1.3)
-	if (graphics_mode == gmMcgaVga && level_var_palettes != NULL) {
-		int level_color = custom->tbl_level_color[current_level];
-		if (level_color != 0) {
-			byte* env_pal = level_var_palettes + 0x30*(level_color-1);
-			byte* wall_pal = env_pal + 0x30 * custom->tbl_level_type[current_level];
-			set_pal_arr(0x50, 0x10, (rgb_type*)env_pal);
-			set_pal_arr(0x60, 0x10, (rgb_type*)wall_pal);
-			set_chtab_palette(chtab_addrs[id_chtab_6_environment], env_pal, 0x10);
-			set_chtab_palette(chtab_addrs[id_chtab_7_environmentwall], wall_pal, 0x10);
+	if (!environment_from_cache) {
+		load_chtab_from_file(id_chtab_7_environmentwall, 360, filename, 1<<6);
+
+		// Level colors (1.3)
+		if (graphics_mode == gmMcgaVga && level_var_palettes != NULL) {
+			if (level_color != 0) {
+				byte* env_pal = level_var_palettes + 0x30*(level_color-1);
+				byte* wall_pal = env_pal + 0x30 * environment_type;
+				set_pal_arr(0x50, 0x10, (rgb_type*)env_pal);
+				set_pal_arr(0x60, 0x10, (rgb_type*)wall_pal);
+				set_chtab_palette(chtab_addrs[id_chtab_6_environment], env_pal, 0x10);
+				set_chtab_palette(chtab_addrs[id_chtab_7_environmentwall], wall_pal, 0x10);
+			}
 		}
 	}
 
@@ -1706,6 +1943,12 @@ void free_all_chtabs_from(int first) {
 	free_peels();
 	for (word chtab_id = first; chtab_id < 10; ++chtab_id) {
 		if (chtab_addrs[chtab_id]) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			if (wii_is_cached_environment_chtab(chtab_addrs[chtab_id])) {
+				chtab_addrs[chtab_id] = NULL;
+				continue;
+			}
+#endif
 			free_chtab(chtab_addrs[chtab_id]);
 			chtab_addrs[chtab_id] = NULL;
 		}
@@ -2262,6 +2505,12 @@ void clear_screen_and_sounds() {
 	// should these be freed?
 	for (short index = 2; index < 10; ++index) {
 		if (chtab_addrs[index]) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			if (wii_is_cached_environment_chtab(chtab_addrs[index])) {
+				chtab_addrs[index] = NULL;
+				continue;
+			}
+#endif
 			// Original code does not free these?
 			free_chtab(chtab_addrs[index]);
 			chtab_addrs[index] = NULL;

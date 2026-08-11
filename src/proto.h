@@ -48,6 +48,9 @@ void play_next_sound(void);
 void check_sword_vs_sword(void);
 void load_chtab_from_file(int chtab_id,int resource,const char* filename,int palette_bits);
 void free_all_chtabs_from(int first);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+void free_wii_environment_cache(void);
+#endif
 void load_more_opt_graf(const char* filename);
 int do_paused(void);
 void read_keyb_control(void);

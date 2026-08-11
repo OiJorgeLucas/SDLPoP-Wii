@@ -365,6 +365,9 @@ void quit(int exit_code) {
 
 // seg009:0C90
 void restore_stuff() {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	free_wii_environment_cache();
+#endif
 	SDL_Quit();
 }
 

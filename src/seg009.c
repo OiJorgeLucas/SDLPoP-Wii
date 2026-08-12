@@ -21,6 +21,7 @@ The authors of this program may be contacted at https://forum.princed.org
 #include "common.h"
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 #include "wii_input.h"
+#include <ogc/conf.h>
 #endif
 #include <string.h>
 #include <time.h>
@@ -2578,11 +2579,20 @@ int check_sound_playing() {
 
 void apply_aspect_ratio() {
 	// Allow us to use a consistent set of screen co-ordinates, even if the screen size changes
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/*
+	 * Keep the Wii renderer on the known-good 320x200 logical canvas.
+	 * The Wii-specific aspect-ratio adjustment is applied only to the final
+	 * presentation rectangle in update_screen().
+	 */
+	SDL_RenderSetLogicalSize(renderer_, 320, 200);
+#else
 	if (use_correct_aspect_ratio) {
 		SDL_RenderSetLogicalSize(renderer_, 320 * 5, 200 * 6); // 4:3
 	} else {
 		SDL_RenderSetLogicalSize(renderer_, 320, 200); // 16:10
 	}
+#endif
 	window_resized();
 }
 
@@ -2707,6 +2717,7 @@ void set_gr_mode(byte grmode) {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 	// Wii fullscreen defaults for console builds.
 	start_fullscreen = 1;
+	use_integer_scaling = 0;
 	pop_window_width = 640;
 	pop_window_height = 480;
 	flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -2890,6 +2901,35 @@ void draw_overlay(void) {
 	}
 }
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+/*
+ * Wii-only aspect-ratio presentation.
+ *
+ * Leave SDL's renderer, logical size, framebuffer and VI configuration alone.
+ * Wii 4:3 and Wii 16:9 with the option disabled use the original full-width
+ * presentation path. On Wii 16:9 with the option enabled, narrow only the
+ * final RenderCopy destination to 240 logical pixels (about 480 output pixels),
+ * giving the 320x200 game image a 16:10 presentation on a 16:9 display.
+ */
+static const SDL_Rect* wii_get_aspect_ratio_rect(SDL_Rect* dest) {
+	static int wii_is_widescreen = -1;
+
+	if (wii_is_widescreen < 0) {
+		wii_is_widescreen = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
+	}
+
+	if (dest == NULL || !wii_is_widescreen || !use_correct_aspect_ratio) {
+		return NULL;
+	}
+
+	dest->w = 240;
+	dest->h = 200;
+	dest->x = (320 - dest->w) / 2;
+	dest->y = 0;
+	return dest;
+}
+#endif
+
 void update_screen() {
 	draw_overlay();
 	SDL_Surface* surface = get_final_surface();
@@ -2915,7 +2955,13 @@ void update_screen() {
 		SDL_UpdateTexture(target_texture, NULL, surface->pixels, surface->pitch);
 	}
 	SDL_RenderClear(renderer_);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	SDL_Rect wii_dest_rect;
+	const SDL_Rect* final_dest_rect = wii_get_aspect_ratio_rect(&wii_dest_rect);
+	SDL_RenderCopy(renderer_, target_texture, NULL, final_dest_rect);
+#else
 	SDL_RenderCopy(renderer_, target_texture, NULL, NULL);
+#endif
 	SDL_RenderPresent(renderer_);
 }
 

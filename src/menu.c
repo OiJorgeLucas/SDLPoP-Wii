@@ -371,9 +371,11 @@ int integer_scaling_possible =
 ;
 
 setting_type visuals_settings[] = {
+#if !defined(__WII__) && !defined(HW_RVL) && !defined(GEKKO)
 		{.id = SETTING_FULLSCREEN, .style = SETTING_STYLE_TOGGLE, .linked = &start_fullscreen,
 				.text = "Start fullscreen",
 				.explanation = "Start the game in fullscreen mode.\nYou can also toggle fullscreen by pressing Alt+Enter."},
+#endif
 		{.id = SETTING_USE_HARDWARE_ACCELERATION, .style = SETTING_STYLE_NUMBER, .number_type = SETTING_BYTE, .max = 2,
 				.linked = &use_hardware_acceleration, .names_list = &use_hardware_acceleration_setting_names_list,
 				.text = "Use hardware acceleration",
@@ -383,14 +385,20 @@ setting_type visuals_settings[] = {
 				               "Note: This requires a restart."},
 		{.id = SETTING_USE_CORRECT_ASPECT_RATIO, .style = SETTING_STYLE_TOGGLE, .linked = &use_correct_aspect_ratio,
 				.text = "Use 4:3 aspect ratio",
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				.explanation = "Render the game with reduced horizontal stretching."},
+#else
 				.explanation = "Render the game in the originally intended 4:3 aspect ratio."
 				               "\nNB. Works best using a high resolution."},
+#endif
+#if !defined(__WII__) && !defined(HW_RVL) && !defined(GEKKO)
 		{.id = SETTING_USE_INTEGER_SCALING, .style = SETTING_STYLE_TOGGLE, .linked = &use_integer_scaling,
 				.required = &integer_scaling_possible,
 				.text = "Use integer scaling",
 				.explanation = "Enable pixel perfect scaling. That is, make all pixels the same size by forcing integer scale factors.\n"
 						"Combining with 4:3 aspect ratio requires at least 1600x1200."
 						"\nYou need to compile with SDL 2.0.5 or newer to enable this."},
+#endif
 		{.id = SETTING_SCALING_TYPE, .style = SETTING_STYLE_NUMBER, .number_type = SETTING_BYTE, .max = 2,
 				.linked = &scaling_type, .names_list = &scaling_type_setting_names_list,
 				.text = "Scaling method",
@@ -1941,7 +1949,11 @@ void confirmation_dialog_result(int which_dialog, int button) {
 			play_menu_sound(sound_10_sword_vs_sword);
 			were_settings_changed = true;
 			set_options_to_default();
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			use_integer_scaling = 0;
+#else
 			turn_setting_on_off(SETTING_USE_INTEGER_SCALING, use_integer_scaling, NULL);
+#endif
 #ifdef USE_LIGHTING
 			turn_setting_on_off(SETTING_ENABLE_LIGHTING, enable_lighting, NULL);
 #endif

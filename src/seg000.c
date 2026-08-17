@@ -162,19 +162,40 @@ byte* level_var_palettes;
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 #define WII_ENVIRONMENT_CACHE_COUNT 2
 #define WII_ENVIRONMENT_PALETTE_COLORS 16
+#define WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT 8
+
+enum wii_environment_type {
+	wii_environment_dungeon = 0,
+	wii_environment_palace = 1
+};
+
+enum wii_title_preload_stage {
+	wii_title_preload_palace_res200 = 0,
+	wii_title_preload_dungeon_res200,
+	wii_title_preload_palace_optional_0,
+	wii_title_preload_finish_dungeon,
+	wii_title_preload_finish_palace
+};
 
 typedef struct wii_environment_cache_type {
 	chtab_type* environment;
 	chtab_type* wall;
 	rgb_type environment_palette[WII_ENVIRONMENT_PALETTE_COLORS];
 	rgb_type wall_palette[WII_ENVIRONMENT_PALETTE_COLORS];
+	int optional_next_range;
 	bool loaded;
 } wii_environment_cache_type;
 
 static wii_environment_cache_type wii_environment_cache[WII_ENVIRONMENT_CACHE_COUNT];
 
 static bool wii_is_cached_environment_chtab(const chtab_type* chtab);
+static bool wii_can_use_original_environment_cache(void);
+static bool wii_load_environment_cache_entry(int environment_type);
 static void wii_preload_original_environments(void);
+static void wii_preload_title_stage(int stage);
+static void wii_prepare_environment_cache_before_game(void);
+static void wii_load_environment_optional_range(
+	const char* filename, chtab_type* environment, int graf_index);
 #endif
 
 // seg000:024F
@@ -199,7 +220,13 @@ void init_game_main() {
 	chtab_addrs[id_chtab_1_flameswordpotion] = load_sprites_from_file(150, 1<<3, 1);
 	close_dat(dathandle);
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-	wii_preload_original_environments();
+	/*
+	 * A normal launch hides the environment preload inside the title sequence.
+	 * If the title will not be shown, keep the original first-Loading behavior.
+	 */
+	if (custom->skip_title || start_level >= 0) {
+		wii_preload_original_environments();
+	}
 #endif
 #ifdef USE_LIGHTING
 	init_lighting();
@@ -256,6 +283,9 @@ void start_game() {
 #endif
 	if (custom->skip_title) { // CusPop option: skip the title sequence (level loads instantly)
 		int level_number = (start_level >= 0) ? start_level : custom->first_level;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		wii_prepare_environment_cache_before_game();
+#endif
 		init_game(level_number);
 		return;
 	}
@@ -263,6 +293,9 @@ void start_game() {
 	if (start_level < 0) {
 		show_title();
 	} else {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		wii_prepare_environment_cache_before_game();
+#endif
 		init_game(start_level);
 	}
 }
@@ -1153,6 +1186,15 @@ static bool wii_can_use_original_environment_cache(void) {
 	return !use_custom_levelset && graphics_mode == gmMcgaVga;
 }
 
+static bool wii_environment_cache_is_complete(void) {
+	if (!wii_can_use_original_environment_cache()) return false;
+
+	for (int index = 0; index < WII_ENVIRONMENT_CACHE_COUNT; ++index) {
+		if (!wii_environment_cache[index].loaded) return false;
+	}
+	return true;
+}
+
 static bool wii_is_cached_environment_chtab(const chtab_type* chtab) {
 	if (chtab == NULL) return false;
 
@@ -1199,6 +1241,69 @@ static void wii_release_environment_cache_entry(int environment_type) {
 	memset(entry, 0, sizeof(*entry));
 }
 
+static void wii_get_environment_filename(int environment_type, char* filename, size_t filename_size) {
+	snprintf(filename, filename_size, "%s%s.DAT",
+		tbl_envir_gr[graphics_mode], tbl_envir_ki[environment_type]);
+}
+
+static bool wii_environment_slots_are_available(void) {
+	wii_detach_cached_environment();
+	return chtab_addrs[id_chtab_6_environment] == NULL &&
+		chtab_addrs[id_chtab_7_environmentwall] == NULL;
+}
+
+static bool wii_load_environment_res200(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	if (entry->environment != NULL) return true;
+	if (!wii_environment_slots_are_available()) return false;
+
+	char filename[20];
+	wii_get_environment_filename(environment_type, filename, sizeof(filename));
+	load_chtab_from_file(id_chtab_6_environment, 200, filename, 1 << 5);
+
+	if (chtab_addrs[id_chtab_6_environment] == NULL) return false;
+
+	entry->environment = chtab_addrs[id_chtab_6_environment];
+	chtab_addrs[id_chtab_6_environment] = NULL;
+	return true;
+}
+
+static bool wii_load_environment_next_optional_range(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	if (entry->environment == NULL) return false;
+	if (entry->optional_next_range >= WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return true;
+
+	char filename[20];
+	wii_get_environment_filename(environment_type, filename, sizeof(filename));
+	wii_load_environment_optional_range(filename, entry->environment, entry->optional_next_range);
+	++entry->optional_next_range;
+	return true;
+}
+
+static bool wii_load_environment_wall(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	if (entry->wall != NULL) return true;
+	if (entry->environment == NULL ||
+		entry->optional_next_range < WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return false;
+	if (!wii_environment_slots_are_available()) return false;
+
+	char filename[20];
+	wii_get_environment_filename(environment_type, filename, sizeof(filename));
+	load_chtab_from_file(id_chtab_7_environmentwall, 360, filename, 1 << 6);
+
+	if (chtab_addrs[id_chtab_7_environmentwall] == NULL) return false;
+
+	entry->wall = chtab_addrs[id_chtab_7_environmentwall];
+	chtab_addrs[id_chtab_7_environmentwall] = NULL;
+	return true;
+}
+
 static bool wii_load_environment_base_palettes(
 	const char* filename,
 	wii_environment_cache_type* entry
@@ -1233,6 +1338,22 @@ static bool wii_load_environment_base_palettes(
 	return valid;
 }
 
+static bool wii_finish_environment_cache_entry(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	if (entry->loaded) return true;
+	if (entry->environment == NULL || entry->wall == NULL ||
+		entry->optional_next_range < WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return false;
+
+	char filename[20];
+	wii_get_environment_filename(environment_type, filename, sizeof(filename));
+	if (!wii_load_environment_base_palettes(filename, entry)) return false;
+
+	entry->loaded = true;
+	return true;
+}
+
 static bool wii_load_environment_cache_entry(int environment_type) {
 	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) {
 		return false;
@@ -1241,49 +1362,17 @@ static bool wii_load_environment_cache_entry(int environment_type) {
 	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
 	if (entry->loaded) return true;
 
-	/* Loading helpers use the global slots temporarily. */
-	wii_detach_cached_environment();
-	if (chtab_addrs[id_chtab_6_environment] != NULL ||
-		chtab_addrs[id_chtab_7_environmentwall] != NULL) {
-		return false;
+	if (!wii_load_environment_res200(environment_type)) goto error;
+	while (entry->optional_next_range < WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) {
+		if (!wii_load_environment_next_optional_range(environment_type)) goto error;
 	}
-
-	char filename[20];
-	snprintf(filename, sizeof(filename), "%s%s.DAT",
-		tbl_envir_gr[graphics_mode], tbl_envir_ki[environment_type]);
-
-	load_chtab_from_file(id_chtab_6_environment, 200, filename, 1 << 5);
-	load_more_opt_graf(filename);
-	load_chtab_from_file(id_chtab_7_environmentwall, 360, filename, 1 << 6);
-
-	chtab_type* environment = chtab_addrs[id_chtab_6_environment];
-	chtab_type* wall = chtab_addrs[id_chtab_7_environmentwall];
-
-	if (environment == NULL || wall == NULL) {
-		if (environment != NULL) free_chtab(environment);
-		if (wall != NULL) free_chtab(wall);
-		chtab_addrs[id_chtab_6_environment] = NULL;
-		chtab_addrs[id_chtab_7_environmentwall] = NULL;
-		memset(entry, 0, sizeof(*entry));
-		return false;
-	}
-
-	if (!wii_load_environment_base_palettes(filename, entry)) {
-		free_chtab(environment);
-		free_chtab(wall);
-		chtab_addrs[id_chtab_6_environment] = NULL;
-		chtab_addrs[id_chtab_7_environmentwall] = NULL;
-		memset(entry, 0, sizeof(*entry));
-		return false;
-	}
-
-	entry->environment = environment;
-	entry->wall = wall;
-	entry->loaded = true;
-
-	chtab_addrs[id_chtab_6_environment] = NULL;
-	chtab_addrs[id_chtab_7_environmentwall] = NULL;
+	if (!wii_load_environment_wall(environment_type)) goto error;
+	if (!wii_finish_environment_cache_entry(environment_type)) goto error;
 	return true;
+
+error:
+	wii_release_environment_cache_entry(environment_type);
+	return false;
 }
 
 static void wii_apply_cached_environment_palette(
@@ -1325,10 +1414,77 @@ static bool wii_activate_cached_environment(int environment_type, int level_colo
 	return true;
 }
 
+static void wii_title_preload_checkpoint(void) {
+	/*
+	 * Never call this while a DAT is open or before partial cache ownership is
+	 * committed: process_key() can call start_game(), which longjmps out of the
+	 * title sequence.
+	 */
+	process_events();
+	do_paused();
+}
+
+static bool wii_finish_environment_for_title(int environment_type) {
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+
+	while (entry->optional_next_range < WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) {
+		if (!wii_load_environment_next_optional_range(environment_type)) return false;
+		wii_title_preload_checkpoint();
+	}
+
+	if (entry->wall == NULL) {
+		if (!wii_load_environment_wall(environment_type)) return false;
+		wii_title_preload_checkpoint();
+	}
+
+	if (!entry->loaded) {
+		if (!wii_finish_environment_cache_entry(environment_type)) return false;
+	}
+	return true;
+}
+
+static void wii_preload_title_stage(int stage) {
+	if (!wii_can_use_original_environment_cache() || wii_environment_cache_is_complete()) return;
+
+	/* Present the already-drawn title screen before doing synchronous I/O. */
+	update_screen();
+
+	bool ok = true;
+	switch (stage) {
+		case wii_title_preload_palace_res200:
+			ok = wii_load_environment_res200(wii_environment_palace);
+		break;
+		case wii_title_preload_dungeon_res200:
+			ok = wii_load_environment_res200(wii_environment_dungeon);
+		break;
+		case wii_title_preload_palace_optional_0:
+			if (wii_environment_cache[wii_environment_palace].optional_next_range == 0) {
+				ok = wii_load_environment_next_optional_range(wii_environment_palace);
+			}
+		break;
+		case wii_title_preload_finish_dungeon:
+			ok = wii_finish_environment_for_title(wii_environment_dungeon);
+		break;
+		case wii_title_preload_finish_palace:
+			ok = wii_finish_environment_for_title(wii_environment_palace);
+		break;
+		default:
+			return;
+	}
+
+	if (!ok) {
+		/* Keep failure behavior simple and safe: discard only the failed entry. */
+		int environment_type = (stage == wii_title_preload_palace_res200 ||
+			stage == wii_title_preload_palace_optional_0 ||
+			stage == wii_title_preload_finish_palace)
+			? wii_environment_palace : wii_environment_dungeon;
+		wii_release_environment_cache_entry(environment_type);
+	}
+}
+
 static void wii_preload_original_environments(void) {
 	if (!wii_can_use_original_environment_cache()) return;
 
-	/* Load both original environment sets while the first Loading screen is visible. */
 	for (int environment_type = 0;
 		environment_type < WII_ENVIRONMENT_CACHE_COUNT;
 		++environment_type) {
@@ -1337,6 +1493,23 @@ static void wii_preload_original_environments(void) {
 		}
 	}
 	wii_detach_cached_environment();
+}
+
+static void wii_prepare_environment_cache_before_game(void) {
+	/* A replay selected from the title may have switched to a custom levelset. */
+	if (!wii_can_use_original_environment_cache()) {
+		free_wii_environment_cache();
+		return;
+	}
+
+	if (wii_environment_cache_is_complete()) return;
+
+	/*
+	 * The title was skipped before all partial work finished. Show an explicit
+	 * fallback Loading screen and finish only the missing cache work.
+	 */
+	show_loading();
+	wii_preload_original_environments();
 }
 
 void free_wii_environment_cache(void) {
@@ -1965,6 +2138,22 @@ void load_one_optgraf(chtab_type* chtab_ptr,dat_pal_type* pal_ptr,int base_id,in
 
 byte optgraf_min[] = {0x01, 0x1E, 0x4B, 0x4E, 0x56, 0x65, 0x7F, 0x0A};
 byte optgraf_max[] = {0x09, 0x1F, 0x4D, 0x53, 0x5B, 0x7B, 0x8F, 0x0D};
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+static void wii_load_environment_optional_range(
+	const char* filename, chtab_type* environment, int graf_index
+) {
+	if (filename == NULL || environment == NULL ||
+		graf_index < 0 || graf_index >= WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return;
+
+	dat_shpl_type area;
+	dat_type* dathandle = open_dat(filename, 'G');
+	load_from_opendats_to_area(200, &area, sizeof(area), "pal");
+	area.palette.row_bits = 0x20;
+	load_one_optgraf(environment, &area.palette, 1200,
+		optgraf_min[graf_index] - 1, optgraf_max[graf_index] - 1);
+	close_dat(dathandle);
+}
+#endif
 // seg000:13FC
 void load_more_opt_graf(const char* filename) {
 	// stub
@@ -2242,22 +2431,34 @@ void show_title() {
 	play_sound_from_buffer(sound_pointers[sound_54_intro_music]); // main theme
 	start_timer(timer_0, 0x82);
 	draw_full_image(TITLE_PRESENTS);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_preload_title_stage(wii_title_preload_palace_res200);
+#endif
 	do_wait(timer_0);
 
 	start_timer(timer_0, 0xCD);
 	method_1_blit_rect(onscreen_surface_, offscreen_surface, &rect_titles, &rect_titles, blitters_0_no_transp);
 	draw_full_image(TITLE_MAIN);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_preload_title_stage(wii_title_preload_dungeon_res200);
+#endif
 	do_wait(timer_0);
 
 	start_timer(timer_0, 0x41);
 	method_1_blit_rect(onscreen_surface_, offscreen_surface, &rect_titles, &rect_titles, blitters_0_no_transp);
 	draw_full_image(TITLE_MAIN);
 	draw_full_image(TITLE_GAME);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_preload_title_stage(wii_title_preload_palace_optional_0);
+#endif
 	do_wait(timer_0);
 
 	start_timer(timer_0, 0x10E);
 	method_1_blit_rect(onscreen_surface_, offscreen_surface, &rect_titles, &rect_titles, blitters_0_no_transp);
 	draw_full_image(TITLE_MAIN);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_preload_title_stage(wii_title_preload_finish_dungeon);
+#endif
 	do_wait(timer_0);
 
 	start_timer(timer_0, 0xEB);
@@ -2265,6 +2466,9 @@ void show_title() {
 	draw_full_image(TITLE_MAIN);
 	draw_full_image(TITLE_POP);
 	draw_full_image(TITLE_MECHNER);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_preload_title_stage(wii_title_preload_finish_palace);
+#endif
 	do_wait(timer_0);
 
 	method_1_blit_rect(onscreen_surface_, offscreen_surface, &rect_titles, &rect_titles, blitters_0_no_transp);

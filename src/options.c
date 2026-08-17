@@ -531,10 +531,71 @@ enum dos_version {
 	dos_14_unpacked = 5,
 };
 
+static bool is_valid_exe_range(int exe_offset, size_t nbytes, int exe_size) {
+	if (exe_offset < 0 || exe_size < 0) return false; // Happens if a CusPop modification is not available for the mod's EXE version.
+	size_t offset = (size_t)exe_offset;
+	size_t size = (size_t)exe_size;
+	return offset <= size && nbytes <= size - offset;
+}
+
 bool read_exe_bytes(void* dest, size_t nbytes, byte* exe_memory, int exe_offset, int exe_size) {
-	if (exe_offset < 0) return false; // Happens if a CusPop modification is not available for the mod's EXE version.
-	if (exe_offset < exe_size) {
-		memcpy(dest, exe_memory + exe_offset, nbytes);
+	if (!is_valid_exe_range(exe_offset, nbytes, exe_size)) return false;
+	memcpy(dest, exe_memory + exe_offset, nbytes);
+	return true;
+}
+
+static bool read_exe_byte_to_word(word* dest, byte* exe_memory, int exe_offset, int exe_size) {
+	byte value;
+	if (!read_exe_bytes(&value, sizeof(value), exe_memory, exe_offset, exe_size)) return false;
+	*dest = value;
+	return true;
+}
+
+static bool read_exe_le16(word* dest, byte* exe_memory, int exe_offset, int exe_size) {
+	word value;
+	if (!read_exe_bytes(&value, sizeof(value), exe_memory, exe_offset, exe_size)) return false;
+	*dest = SDL_SwapLE16(value);
+	return true;
+}
+
+static bool read_exe_le16_to_byte(byte* dest, byte* exe_memory, int exe_offset, int exe_size) {
+	word value;
+	if (!read_exe_le16(&value, exe_memory, exe_offset, exe_size)) return false;
+	*dest = (byte)value;
+	return true;
+}
+
+static bool read_exe_le16_array(word* dest, size_t count, byte* exe_memory, int exe_offset, int exe_size) {
+	if (!is_valid_exe_range(exe_offset, count * sizeof(word), exe_size)) return false;
+	for (size_t index = 0; index < count; ++index) {
+		word value;
+		memcpy(&value, exe_memory + exe_offset + index * sizeof(word), sizeof(value));
+		dest[index] = SDL_SwapLE16(value);
+	}
+	return true;
+}
+
+static bool read_exe_sle16_array(short* dest, size_t count, byte* exe_memory, int exe_offset, int exe_size) {
+	if (!is_valid_exe_range(exe_offset, count * sizeof(word), exe_size)) return false;
+	for (size_t index = 0; index < count; ++index) {
+		word value;
+		memcpy(&value, exe_memory + exe_offset + index * sizeof(word), sizeof(value));
+		dest[index] = (short)SDL_SwapLE16(value);
+	}
+	return true;
+}
+
+static bool read_exe_auto_moves(auto_move_type* dest, size_t count, byte* exe_memory, int exe_offset, int exe_size) {
+	const size_t bytes_per_move = sizeof(word) * 2;
+	if (!is_valid_exe_range(exe_offset, count * bytes_per_move, exe_size)) return false;
+	for (size_t index = 0; index < count; ++index) {
+		word time;
+		word move;
+		const byte* source = exe_memory + exe_offset + index * bytes_per_move;
+		memcpy(&time, source, sizeof(time));
+		memcpy(&move, source + sizeof(time), sizeof(move));
+		dest[index].time = (short)SDL_SwapLE16(time);
+		dest[index].move = (short)SDL_SwapLE16(move);
 	}
 	return true;
 }
@@ -604,15 +665,57 @@ void load_dos_exe_modifications(const char* folder_name) {
 			read_ok = read_exe_bytes(x, nbytes, exe_memory, offset, (int)info.st_size); \
 		} while(0)
 
+#define process_byte_to_word(x, ...) \
+		do { \
+			static const int offsets[6] = __VA_ARGS__; \
+			int offset = offsets[dos_version]; \
+			read_ok = read_exe_byte_to_word(x, exe_memory, offset, (int)info.st_size); \
+		} while(0)
+
+#define process_le16(x, ...) \
+		do { \
+			static const int offsets[6] = __VA_ARGS__; \
+			int offset = offsets[dos_version]; \
+			read_ok = read_exe_le16(x, exe_memory, offset, (int)info.st_size); \
+		} while(0)
+
+#define process_le16_to_byte(x, ...) \
+		do { \
+			static const int offsets[6] = __VA_ARGS__; \
+			int offset = offsets[dos_version]; \
+			read_ok = read_exe_le16_to_byte(x, exe_memory, offset, (int)info.st_size); \
+		} while(0)
+
+#define process_le16_array(x, count, ...) \
+		do { \
+			static const int offsets[6] = __VA_ARGS__; \
+			int offset = offsets[dos_version]; \
+			read_ok = read_exe_le16_array(x, count, exe_memory, offset, (int)info.st_size); \
+		} while(0)
+
+#define process_sle16_array(x, count, ...) \
+		do { \
+			static const int offsets[6] = __VA_ARGS__; \
+			int offset = offsets[dos_version]; \
+			read_ok = read_exe_sle16_array(x, count, exe_memory, offset, (int)info.st_size); \
+		} while(0)
+
+#define process_auto_moves(x, count, ...) \
+		do { \
+			static const int offsets[6] = __VA_ARGS__; \
+			int offset = offsets[dos_version]; \
+			read_ok = read_exe_auto_moves(x, count, exe_memory, offset, (int)info.st_size); \
+		} while(0)
+
 		// Offsets and comparisons are derived from princehack.xml
-		process(&custom_saved.start_minutes_left, 2, {0x04a23, 0x060d3, 0x04ea3, 0x055e3, 0x0495f, 0x05a8f});
-		process(&custom_saved.start_ticks_left, 2, {0x04a29, 0x060d9, 0x04ea9, 0x055e9, 0x04965, 0x05a95});
-		process(&custom_saved.start_hitp, 2, {0x04a2f, 0x060df, 0x04eaf, 0x055ef, 0x0496b, 0x05a9b});
-		process(&custom_saved.first_level, 2, {0x00707, 0x01db7, 0x007db, 0x00f1b, 0x0079f, 0x018cf});
-		process(&custom_saved.max_hitp_allowed, 2, {0x013f1, 0x02aa1, 0x015ac, 0x01cec, 0x014a3, 0x025d3});
-		process(&custom_saved.saving_allowed_first_level, 1, {0x007c8, 0x01e78, 0x008b4, 0x00ff4, 0x00878, 0x019a8});
+		process_le16(&custom_saved.start_minutes_left, {0x04a23, 0x060d3, 0x04ea3, 0x055e3, 0x0495f, 0x05a8f});
+		process_le16(&custom_saved.start_ticks_left, {0x04a29, 0x060d9, 0x04ea9, 0x055e9, 0x04965, 0x05a95});
+		process_le16(&custom_saved.start_hitp, {0x04a2f, 0x060df, 0x04eaf, 0x055ef, 0x0496b, 0x05a9b});
+		process_le16(&custom_saved.first_level, {0x00707, 0x01db7, 0x007db, 0x00f1b, 0x0079f, 0x018cf});
+		process_le16(&custom_saved.max_hitp_allowed, {0x013f1, 0x02aa1, 0x015ac, 0x01cec, 0x014a3, 0x025d3});
+		process_byte_to_word(&custom_saved.saving_allowed_first_level, {0x007c8, 0x01e78, 0x008b4, 0x00ff4, 0x00878, 0x019a8});
 		if (read_ok) custom_saved.saving_allowed_first_level += 1;
-		process(&custom_saved.saving_allowed_last_level, 1, {0x007cf, 0x01e7f, 0x008bb, 0x00ffb, 0x0087f, 0x019af});
+		process_byte_to_word(&custom_saved.saving_allowed_last_level, {0x007cf, 0x01e7f, 0x008bb, 0x00ffb, 0x0087f, 0x019af});
 		if (read_ok) custom_saved.saving_allowed_last_level -= 1;
 		if (dos_version == dos_10_packed || dos_version == dos_10_unpacked) {
 			static const byte comparison[] = {0xa3, 0x92, 0x4e, 0xa3, 0x5c, 0x40, 0xa3, 0x8e, 0x4e, 0xa2, 0x2a,
@@ -621,7 +724,7 @@ void load_dos_exe_modifications(const char* folder_name) {
 			custom_saved.start_upside_down = (memcmp(temp_bytes, comparison, COUNT(comparison)) != 0);
 		}
 		process(&custom_saved.start_in_blind_mode, 1, {0x04e46, 0x064f6, 0x052ce, 0x05a0e, 0x04d8a, 0x05eba});
-		process(&custom_saved.copyprot_level, 2, {0x1aaeb, 0x1c62e, 0x1b89b, 0x1c49e, 0x17c3d, 0x18e18});
+		process_le16(&custom_saved.copyprot_level, {0x1aaeb, 0x1c62e, 0x1b89b, 0x1c49e, 0x17c3d, 0x18e18});
 		process(&custom_saved.drawn_tile_top_level_edge, 1, {0x0a1f0, 0x0b8a0, 0x0a69c, 0x0addc, 0x0a158, 0x0b288});
 		process(&custom_saved.drawn_tile_left_level_edge, 1, {0x0a26b, 0x0b91b, -1, -1, -1, -1});
 		process(&custom_saved.level_edge_hit_tile, 1, {0x06f02, 0x085b2, -1, -1, -1, -1});
@@ -635,28 +738,28 @@ void load_dos_exe_modifications(const char* folder_name) {
 		if (read_ok) custom_saved.enable_wda_in_palace = (temp_bytes[0] != 116);
 		process(&custom_saved.tbl_level_type, 16, {0x1acea, 0x1c842, 0x1b9ae, 0x1c5c6, 0x17d4c, 0x18f3c});
 		process(&custom_saved.tbl_guard_hp, 16, {0x1b8a8, 0x1d46a, 0x1c6c5, 0x1d35c, 0x18a97, 0x19d06});
-		process(&custom_saved.tbl_guard_type, sizeof(short)*16, {-1, 0x1c964, -1, 0x1c702, -1, 0x1905e});
+		process_sle16_array(custom_saved.tbl_guard_type, 16, {-1, 0x1c964, -1, 0x1c702, -1, 0x1905e});
 		process(&custom_saved.vga_palette, sizeof(rgb_type)*16,  {0x1d141, 0x1f136, 0x1df5e, 0x1f02a, 0x1a335, 0x1b9de});
-		process(&temp_word, 2, {0x003e2, 0x01a92, 0x0046b, 0x00bab, 0x00455, 0x01585}); // titles skipping
+		process_le16(&temp_word, {0x003e2, 0x01a92, 0x0046b, 0x00bab, 0x00455, 0x01585}); // titles skipping
 		if (read_ok) custom_saved.skip_title = (temp_word != 63558);
-		process(&custom_saved.shift_L_allowed_until_level, 1, {0x0085c, 0x01f0c, 0x00955, 0x01095, 0x00919, 0x01a49});
+		process_byte_to_word(&custom_saved.shift_L_allowed_until_level, {0x0085c, 0x01f0c, 0x00955, 0x01095, 0x00919, 0x01a49});
 		if (read_ok) custom_saved.shift_L_allowed_until_level += 1;
-		process(&custom_saved.shift_L_reduced_minutes, 2, {0x008ad, 0x01f5d, 0x00991, 0x010d1, 0x00955, 0x01a85});
-		process(&custom_saved.shift_L_reduced_ticks, 2, {0x008b3, 0x01f63, 0x00997, 0x010d7, 0x0095b, 0x01a8b});
+		process_le16(&custom_saved.shift_L_reduced_minutes, {0x008ad, 0x01f5d, 0x00991, 0x010d1, 0x00955, 0x01a85});
+		process_le16(&custom_saved.shift_L_reduced_ticks, {0x008b3, 0x01f63, 0x00997, 0x010d7, 0x0095b, 0x01a8b});
 		// TODO: cutscenes
 		// TODO: color variations
-		process(&custom_saved.demo_hitp, 1, {0x04c28, 0x062d8, 0x050b0, 0x057f0, 0x04b6c, 0x05c9c});
-		process(&custom_saved.demo_end_room, 1, {0x00b40, 0x021f0, 0x00c25, 0x01365, 0x00be9, 0x01d19});
-		process(&custom_saved.intro_music_level, 1, {0x04c37, 0x062e7, 0x050bf, 0x057ff, 0x04b7b, 0x05cab});
+		process_byte_to_word(&custom_saved.demo_hitp, {0x04c28, 0x062d8, 0x050b0, 0x057f0, 0x04b6c, 0x05c9c});
+		process_byte_to_word(&custom_saved.demo_end_room, {0x00b40, 0x021f0, 0x00c25, 0x01365, 0x00be9, 0x01d19});
+		process_byte_to_word(&custom_saved.intro_music_level, {0x04c37, 0x062e7, 0x050bf, 0x057ff, 0x04b7b, 0x05cab});
 		process(temp_bytes, 1, {0x04b29, 0x061d9, 0x04fa9, 0x056e9, 0x04a65, 0x05b95}); // where the kid will have the sword
 		if (read_ok) custom_saved.have_sword_from_level = (temp_bytes[0] == 0xEB) ? 16 /*never*/ : 2;
-		process(&custom_saved.checkpoint_level, 1, {0x04b9e, 0x0624e, 0x05026, 0x05766, 0x04ae2, 0x05c12});
+		process_byte_to_word(&custom_saved.checkpoint_level, {0x04b9e, 0x0624e, 0x05026, 0x05766, 0x04ae2, 0x05c12});
 		process(&custom_saved.checkpoint_respawn_dir, 1, {0x04bac, 0x0625c, 0x05034, 0x05774, 0x04af0, 0x05c20});
 		process(&custom_saved.checkpoint_respawn_room, 1, {0x04bb1, 0x06261, 0x05039, 0x05779, 0x04af5, 0x05c25});
 		process(&custom_saved.checkpoint_respawn_tilepos, 1, {0x04bb6, 0x06266, 0x0503e, 0x0577e, 0x04afa, 0x05c2a});
 		process(&custom_saved.checkpoint_clear_tile_room, 1, {0x04bb8, 0x06268, 0x05040, 0x05780, 0x04afc, 0x05c2c});
 		process(&custom_saved.checkpoint_clear_tile_col, 1, {0x04bbc, 0x0626c, 0x05044, 0x05784, 0x04b00, 0x05c30});
-		process(&temp_word, 2, {0x04bbf, 0x0626f, 0x05047, 0x05787, 0x04b03, 0x05c33}); // row of the tile to clear
+		process_le16(&temp_word, {0x04bbf, 0x0626f, 0x05047, 0x05787, 0x04b03, 0x05c33}); // row of the tile to clear
 		if (read_ok) {
 			if (temp_word == 49195) {
 				custom_saved.checkpoint_clear_tile_row = 0;
@@ -666,7 +769,7 @@ void load_dos_exe_modifications(const char* folder_name) {
 				custom_saved.checkpoint_clear_tile_row = 2;
 			}
 		}
-		process(&custom_saved.skeleton_level, 1, {0x046a4, 0x05d54, -1, -1, -1, -1});
+		process_byte_to_word(&custom_saved.skeleton_level, {0x046a4, 0x05d54, -1, -1, -1, -1});
 		process(&custom_saved.skeleton_room, 1, {0x046b8, 0x05d68, -1, -1, -1, -1});
 		process(&custom_saved.skeleton_trigger_column_1, 1, {0x046cc, 0x05d7c, -1, -1, -1, -1});
 		process(&custom_saved.skeleton_trigger_column_2, 1, {0x046d3, 0x05d83, -1, -1, -1, -1});
@@ -679,7 +782,7 @@ void load_dos_exe_modifications(const char* folder_name) {
 		process(&custom_saved.skeleton_reappear_x, 1, {0x03b39, 0x051e9, -1, -1, -1, -1});
 		process(&custom_saved.skeleton_reappear_row, 1, {0x03b3e, 0x051ee, -1, -1, -1, -1});
 		process(&custom_saved.skeleton_reappear_dir, 1, {0x03b43, 0x051f3, -1, -1, -1, -1});
-		process(&custom_saved.mirror_level, 1, {0x08dc7, 0x0a477, 0x09274, 0x099b4, 0x08d30, 0x09e60});
+		process_byte_to_word(&custom_saved.mirror_level, {0x08dc7, 0x0a477, 0x09274, 0x099b4, 0x08d30, 0x09e60});
 		process(&custom_saved.mirror_room, 1, {0x08dcb, 0x0a47b, 0x09278, 0x099b8, 0x08d34, 0x09e64});
 		if (read_ok) {
 			// If opcode is not initialized, I get a warning, but only with -O2: "'opcode' may be used uninitialized". Huh?
@@ -693,7 +796,7 @@ void load_dos_exe_modifications(const char* folder_name) {
 				process(&custom_saved.mirror_column, 1, {0x08dcb+3, 0x0a47b+3, 0x09278+3, 0x099b8+3, 0x08d34+3, 0x09e64+3});
 			}
 		}
-		process(&temp_word, 2, {0x08dcf, 0x0a47f, 0x0927c, 0x099bc, 0x08d38, 0x09e68}); // mirror row
+		process_le16(&temp_word, {0x08dcf, 0x0a47f, 0x0927c, 0x099bc, 0x08d38, 0x09e68}); // mirror row
 		if (read_ok) {
 			if (temp_word == 0xC02B) { // 2B C0 = sub ax,ax
 				custom_saved.mirror_row = 0;
@@ -713,13 +816,13 @@ void load_dos_exe_modifications(const char* folder_name) {
 		process(&custom_saved.shadow_step_level, 1, {-1, 0x4FE7, -1, -1, -1, -1});
 		process(&custom_saved.shadow_step_room, 1, {-1, 0x4FF1, -1, -1, -1, -1});
 
-		process(&custom_saved.falling_exit_level, 1, {0x03eb2, 0x05562, -1, -1, -1, -1});
+		process_byte_to_word(&custom_saved.falling_exit_level, {0x03eb2, 0x05562, -1, -1, -1, -1});
 		process(&custom_saved.falling_exit_room, 1, {0x03eb9, 0x05569, -1, -1, -1, -1});
-		process(&custom_saved.falling_entry_level, 1, {0x04cbd, 0x0636d, -1, -1, -1, -1});
+		process_byte_to_word(&custom_saved.falling_entry_level, {0x04cbd, 0x0636d, -1, -1, -1, -1});
 		process(&custom_saved.falling_entry_room, 1, {0x04cc4, 0x06374, -1, -1, -1, -1});
-		process(&custom_saved.mouse_level, 1, {0x05166, 0x06816, 0x055fa, 0x05d3a, 0x050b6, 0x061e6});
+		process_byte_to_word(&custom_saved.mouse_level, {0x05166, 0x06816, 0x055fa, 0x05d3a, 0x050b6, 0x061e6});
 		process(&custom_saved.mouse_room, 1, {0x0516d, 0x0681d, 0x05601, 0x05d41, 0x050bd, 0x061ed});
-		process(&custom_saved.mouse_delay, 2, {0x0517f, 0x0682f, 0x05613, 0x05d53, 0x050cf, 0x061ff});
+		process_le16(&custom_saved.mouse_delay, {0x0517f, 0x0682f, 0x05613, 0x05d53, 0x050cf, 0x061ff});
 		process(&custom_saved.mouse_object, 1, {0x054b3, 0x06b63, 0x05947, 0x06087, 0x05403, 0x06533});
 		process(&custom_saved.mouse_start_x, 1, {0x054b8, 0x06b68, 0x0594c, 0x0608c, 0x05408, 0x06538});
 		{
@@ -732,37 +835,37 @@ void load_dos_exe_modifications(const char* folder_name) {
 				custom_saved.tbl_seamless_exit[level] = room;
 			}
 		}
-		process(&custom_saved.loose_tiles_level, 1, {0x0120d, 0x028bd, -1, -1, 0x01358, 0x02488});
+		process_byte_to_word(&custom_saved.loose_tiles_level, {0x0120d, 0x028bd, -1, -1, 0x01358, 0x02488});
 		process(&custom_saved.loose_tiles_room_1, 1, {0x01214, 0x028c4, -1, -1, 0x0135f, 0x0248f});
 		process(&custom_saved.loose_tiles_room_2, 1, {0x0121b, 0x028cb, -1, -1, 0x01366, 0x02496});
 		process(&custom_saved.loose_tiles_first_tile, 1, {0x0122e, 0x028de, -1, -1, 0x01379, 0x024a9});
 		process(&custom_saved.loose_tiles_last_tile, 1, {0x0124d, 0x028fd, -1, -1, 0x01398, 0x024c8});
-		process(&custom_saved.jaffar_victory_level, 1, {0x084b3, 0x09b63, 0x08963, 0x090a3, 0x0841f, 0x0954f});
-		process(&custom_saved.jaffar_victory_flash_time, 2, {0x084c0, 0x09b70, 0x08970, 0x090b0, 0x0842c, 0x0955c});
-		process(&custom_saved.hide_level_number_from_level, 2, {0x0c3d9, 0x0da89, 0x0c8cd, 0x0d00d, 0x0c389, 0x0d4b9});
+		process_byte_to_word(&custom_saved.jaffar_victory_level, {0x084b3, 0x09b63, 0x08963, 0x090a3, 0x0841f, 0x0954f});
+		process_le16_to_byte(&custom_saved.jaffar_victory_flash_time, {0x084c0, 0x09b70, 0x08970, 0x090b0, 0x0842c, 0x0955c});
+		process_le16(&custom_saved.hide_level_number_from_level, {0x0c3d9, 0x0da89, 0x0c8cd, 0x0d00d, 0x0c389, 0x0d4b9});
 		process(&temp_bytes, 1, {0x0c3d9, 0x0da89, 0x0c8cd, 0x0d00d, 0x0c389, 0x0d4b9});
 		if (read_ok) custom_saved.level_13_level_number = (temp_bytes[0] == 0xEB) ? 13 : 12;
-		process(&custom_saved.victory_stops_time_level, 1, {0x0c2e0, 0x0d990, -1, -1, -1, -1});
-		process(&custom_saved.win_level, 1, {0x011dc, 0x0288c, 0x01397, 0x01ad7, 0x01327, 0x02457});
+		process_byte_to_word(&custom_saved.victory_stops_time_level, {0x0c2e0, 0x0d990, -1, -1, -1, -1});
+		process_byte_to_word(&custom_saved.win_level, {0x011dc, 0x0288c, 0x01397, 0x01ad7, 0x01327, 0x02457});
 		process(&custom_saved.win_room, 1, {0x011e3, 0x02893, 0x0139e, 0x01ade, 0x0132e, 0x0245e});
 		process(&custom_saved.loose_floor_delay, 1, {0x9536, 0xABE6, -1, -1, -1, -1});
 
 		// guard skills
-		process(&custom_saved.strikeprob   , 2*NUM_GUARD_SKILLS, {-1, 0x1D3C2, -1, 0x1D2B4, -1, 0x19C5E});
-		process(&custom_saved.restrikeprob , 2*NUM_GUARD_SKILLS, {-1, 0x1D3DA, -1, 0x1D2CC, -1, 0x19C76});
-		process(&custom_saved.blockprob    , 2*NUM_GUARD_SKILLS, {-1, 0x1D3F2, -1, 0x1D2E4, -1, 0x19C8E});
-		process(&custom_saved.impblockprob , 2*NUM_GUARD_SKILLS, {-1, 0x1D40A, -1, 0x1D2FC, -1, 0x19CA6});
-		process(&custom_saved.advprob      , 2*NUM_GUARD_SKILLS, {-1, 0x1D422, -1, 0x1D314, -1, 0x19CBE});
-		process(&custom_saved.refractimer  , 2*NUM_GUARD_SKILLS, {-1, 0x1D43A, -1, 0x1D32C, -1, 0x19CD6});
-		process(&custom_saved.extrastrength, 2*NUM_GUARD_SKILLS, {-1, 0x1D452, -1, 0x1D344, -1, 0x19CEE});
+		process_le16_array(custom_saved.strikeprob, NUM_GUARD_SKILLS, {-1, 0x1D3C2, -1, 0x1D2B4, -1, 0x19C5E});
+		process_le16_array(custom_saved.restrikeprob, NUM_GUARD_SKILLS, {-1, 0x1D3DA, -1, 0x1D2CC, -1, 0x19C76});
+		process_le16_array(custom_saved.blockprob, NUM_GUARD_SKILLS, {-1, 0x1D3F2, -1, 0x1D2E4, -1, 0x19C8E});
+		process_le16_array(custom_saved.impblockprob, NUM_GUARD_SKILLS, {-1, 0x1D40A, -1, 0x1D2FC, -1, 0x19CA6});
+		process_le16_array(custom_saved.advprob, NUM_GUARD_SKILLS, {-1, 0x1D422, -1, 0x1D314, -1, 0x19CBE});
+		process_le16_array(custom_saved.refractimer, NUM_GUARD_SKILLS, {-1, 0x1D43A, -1, 0x1D32C, -1, 0x19CD6});
+		process_le16_array(custom_saved.extrastrength, NUM_GUARD_SKILLS, {-1, 0x1D452, -1, 0x1D344, -1, 0x19CEE});
 
 		// shadow's starting positions
 		process(&custom_saved.init_shad_6    , 8, {0x1B8B8, 0x1D47A, 0x1C6D5, 0x1D36C, 0x18AA7, 0x19D16});
 		process(&custom_saved.init_shad_5    , 8, {0x1B8C0, 0x1D482, 0x1C6DD, 0x1D374, 0x18AAF, 0x19D1E});
 		process(&custom_saved.init_shad_12   , 8, {     -1, 0x1D48A,      -1, 0x1D37C,      -1, 0x19D26}); // in the packed versions, the five zero bytes at the end are compressed
 		// automatic moves
-		process(&custom_saved.shad_drink_move,  8*4, {     -1, 0x1D492,      -1, 0x1D384,      -1, 0x19D2E}); // in the packed versions, the four zero bytes at the start are compressed
-		process(&custom_saved.demo_moves     , 25*4, {0x1B8EE, 0x1D4B2, 0x1C70B, 0x1D3A4, 0x18ADD, 0x19D4E});
+		process_auto_moves(custom_saved.shad_drink_move, 8, {     -1, 0x1D492,      -1, 0x1D384,      -1, 0x19D2E}); // in the packed versions, the four zero bytes at the start are compressed
+		process_auto_moves(custom_saved.demo_moves, 25, {0x1B8EE, 0x1D4B2, 0x1C70B, 0x1D3A4, 0x18ADD, 0x19D4E});
 
 		// speeds
 		process(&custom_saved.base_speed   , 1, { 0x4F01, 0x65B1, 0x5389, 0x5AC9, 0x4E45, 0x5F75 });
@@ -776,6 +879,12 @@ void load_dos_exe_modifications(const char* folder_name) {
 
 		// The order of offsets is: dos_10_packed, dos_10_unpacked, dos_13_packed, dos_13_unpacked, dos_14_packed, dos_14_unpacked
 
+#undef process_auto_moves
+#undef process_sle16_array
+#undef process_le16_array
+#undef process_le16_to_byte
+#undef process_le16
+#undef process_byte_to_word
 #undef process
 		free(exe_memory);
 	}

@@ -234,6 +234,21 @@ void list_replay_files(void) {
 			ok = read_replay_header( &replay_info->header, fp, NULL );
 			fclose( fp );
 		}
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		if (ok) {
+			/*
+			 * Keep replay cycling within the levelset selected for this Wii
+			 * session. Replay files remain in the shared replay folder; only
+			 * the list presented by Tab is filtered.
+			 */
+			if (use_custom_levelset) {
+				ok = replay_info->header.uses_custom_levelset &&
+					strcasecmp(replay_info->header.levelset_name, levelset_name) == 0;
+			} else {
+				ok = !replay_info->header.uses_custom_levelset;
+			}
+		}
+#endif
 		if (!ok) --num_replay_files; // scrap the file if it is not compatible
 
 	} while (find_next_file(directory_listing));
@@ -651,7 +666,16 @@ void apply_replay_options(void) {
 	use_custom_levelset = (levelset_name[0] == '\0') ? 0 : 1;
 
 	load_mod_options(); // Load resources from the correct places if there is a mod name in the replay file. This also prevents unwanted switching to PC Speaker mode.
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/*
+	 * The replay savestate is restored before its first frame is drawn, and
+	 * restore_savestate_from_buffer() reloads these same resources again.
+	 * Defer the Wii reload to that restore step so replay startup/cycling does
+	 * not load identical resources twice.
+	 */
+#else
 	reload_resources();
+#endif
 }
 
 void restore_normal_options(void) {
@@ -678,6 +702,15 @@ static void print_remaining_time() {
 }
 
 void start_replay() {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (!enable_replay) return;
+	need_start_replay = 0;
+	if (!is_validate_mode) {
+		list_replay_files();
+		if (num_replay_files == 0) return;
+	}
+	stop_sounds(); // Stop intro audio only after a matching replay was found.
+#else
 	stop_sounds(); // Don't crash if the intro music is interrupted by Tab in PC Speaker mode.
 	if (!enable_replay) return;
 	need_start_replay = 0;
@@ -686,6 +719,7 @@ void start_replay() {
 		// If the replay was started from a file given in the command line, we don't care if there are no replay files in the replay folder.
 		//if (num_replay_files == 0) return;
 	}
+#endif
 	if (!load_replay()) return;
 	// Set replaying before applying options, so the latter can display an appropriate error message if the referenced mod is missing.
 	replaying = 1;

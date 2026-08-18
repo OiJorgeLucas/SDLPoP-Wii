@@ -79,7 +79,21 @@ void play_level(int level_number) {
 			}
 		}
 		if (level_number != current_level) {
-			load_lev_spr(level_number);
+#if (defined(__WII__) || defined(HW_RVL) || defined(GEKKO)) && defined(USE_REPLAY)
+			/*
+			 * A custom-levelset replay restores its savestate immediately before
+			 * the first room is drawn. That restore calls load_lev_spr() again, so
+			 * loading the mod's level resources here can cost several seconds only
+			 * to be reloaded moments later. Keep the level globals correct and let
+			 * the savestate restore perform the single required resource load.
+			 */
+			if (use_custom_levelset && replaying && curr_tick == 0) {
+				current_level = next_level = level_number;
+			} else
+#endif
+			{
+				load_lev_spr(level_number);
+			}
 		}
 		load_level();
 		pos_guards();

@@ -339,6 +339,49 @@ static bool wii_text_input_active = false;
 static bool wii_text_input_controller_mode = false;
 static wii_text_input_action wii_text_pending_action = WII_TEXT_INPUT_NONE;
 
+#ifdef USE_REPLAY
+static bool wii_replay_modifier_held = false;
+
+static bool wii_handle_replay_raw_button(const SDL_JoyButtonEvent* button_event, bool pressed, int* replay_key) {
+	if (replay_key != NULL) *replay_key = 0;
+	if (button_event == NULL) return false;
+
+	if (!enable_replay || wii_text_input_active) {
+		wii_replay_modifier_held = false;
+		return false;
+	}
+
+	SDL_Joystick* joystick = SDL_JoystickFromInstanceID(button_event->which);
+	if (joystick == NULL && sdl_controller_ != NULL) {
+		joystick = SDL_GameControllerGetJoystick(sdl_controller_);
+	}
+
+	wii_controller_kind kind = wii_input_get_physical_controller_kind(joystick);
+
+	/* Minus is the common physical modifier on Wii Remote, Nunchuk and
+	 * Classic Controller in the OGC SDL backend (raw button 4). */
+	if (button_event->button == 4) {
+		wii_replay_modifier_held = pressed;
+		return true;
+	}
+
+	/* On Nunchuk, 1 and 2 are otherwise unused by the Wii gameplay mapping.
+	 * They are only replay shortcuts when Minus was already held. */
+	if (!pressed || !wii_replay_modifier_held || kind != WII_CONTROLLER_NUNCHUK) return false;
+
+	if (button_event->button == 2) { // 1
+		if (replay_key != NULL) *replay_key = SDL_SCANCODE_TAB;
+		return true;
+	}
+	if (button_event->button == 3) { // 2
+		if (replay_key != NULL) *replay_key = SDL_SCANCODE_TAB | WITH_CTRL;
+		return true;
+	}
+
+	return false;
+}
+#endif
+
 static bool wii_handle_text_raw_button(const SDL_JoyButtonEvent* button_event) {
 	if (!wii_text_input_active || button_event == NULL) return false;
 
@@ -3900,6 +3943,9 @@ static void activate_wii_controller(SDL_GameController* controller) {
 	is_keyboard_mode = !is_joyst_mode;
 	using_sdl_joystick_interface = 0;
 	clear_wii_controller_state();
+#ifdef USE_REPLAY
+	wii_replay_modifier_held = false;
+#endif
 }
 
 #endif
@@ -4170,6 +4216,9 @@ void process_events() {
 				}
 
 				if (wii_text_input_active) {
+#ifdef USE_REPLAY
+					wii_replay_modifier_held = false;
+#endif
 					wii_text_input_controller_mode = true;
 
 					if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
@@ -4184,6 +4233,25 @@ void process_events() {
 						break;
 					}
 				}
+
+#ifdef USE_REPLAY
+				/* Minus must be pressed first. On Wii Remote and Classic Controller,
+				 * Left/Right are consumed as replay shortcuts instead of gameplay. */
+				if (enable_replay && wii_replay_modifier_held && !wii_text_input_active) {
+					SDL_Joystick* replay_joystick = SDL_GameControllerGetJoystick(event_controller);
+					wii_controller_kind physical_kind = wii_input_get_physical_controller_kind(replay_joystick);
+					if (physical_kind == WII_CONTROLLER_REMOTE || physical_kind == WII_CONTROLLER_CLASSIC) {
+						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
+							last_key_scancode = SDL_SCANCODE_TAB;
+							break;
+						}
+						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
+							last_key_scancode = SDL_SCANCODE_TAB | WITH_CTRL;
+							break;
+						}
+					}
+				}
+#endif
 
 #ifdef USE_MENU
 				/* Keep the original D-pad and analog menu processing. Only face
@@ -4291,6 +4359,19 @@ void process_events() {
 				if (event.type == SDL_JOYBUTTONDOWN && wii_handle_text_raw_button(&event.jbutton)) {
 					break;
 				}
+#ifdef USE_REPLAY
+				if (event.type == SDL_JOYBUTTONDOWN || event.type == SDL_JOYBUTTONUP) {
+					int replay_key = 0;
+					if (wii_handle_replay_raw_button(
+						&event.jbutton,
+						event.type == SDL_JOYBUTTONDOWN,
+						&replay_key
+					)) {
+						if (replay_key != 0) last_key_scancode = replay_key;
+						break;
+					}
+				}
+#endif
 #endif
 				// Only handle the event if the joystick is incompatible with the SDL_GameController interface.
 				// (Otherwise it will interfere with the normal action of the SDL_GameController API.)

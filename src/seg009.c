@@ -326,6 +326,60 @@ dat_type* dat_chain_ptr = NULL;
 
 char last_text_input;
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+typedef enum wii_text_input_action {
+	WII_TEXT_INPUT_NONE = 0,
+	WII_TEXT_INPUT_CONFIRM,
+	WII_TEXT_INPUT_CANCEL,
+	WII_TEXT_INPUT_DELETE,
+	WII_TEXT_INPUT_FINISH,
+} wii_text_input_action;
+
+static bool wii_text_input_active = false;
+static bool wii_text_input_controller_mode = false;
+static wii_text_input_action wii_text_pending_action = WII_TEXT_INPUT_NONE;
+
+static bool wii_handle_text_raw_button(const SDL_JoyButtonEvent* button_event) {
+	if (!wii_text_input_active || button_event == NULL) return false;
+
+	SDL_Joystick* joystick = SDL_JoystickFromInstanceID(button_event->which);
+	if (joystick == NULL && sdl_controller_ != NULL) {
+		joystick = SDL_GameControllerGetJoystick(sdl_controller_);
+	}
+
+	wii_controller_kind kind = wii_input_get_physical_controller_kind(joystick);
+	wii_text_input_action action = WII_TEXT_INPUT_NONE;
+
+	switch (kind) {
+		case WII_CONTROLLER_REMOTE:
+			if (button_event->button == 3) action = WII_TEXT_INPUT_CONFIRM;   // 2
+			else if (button_event->button == 2) action = WII_TEXT_INPUT_DELETE; // 1
+			else if (button_event->button == 0) action = WII_TEXT_INPUT_CANCEL; // A
+			break;
+
+		case WII_CONTROLLER_NUNCHUK:
+			if (button_event->button == 0) action = WII_TEXT_INPUT_CONFIRM;   // A
+			else if (button_event->button == 1) action = WII_TEXT_INPUT_DELETE; // B
+			else if (button_event->button == 8) action = WII_TEXT_INPUT_CANCEL; // C
+			break;
+
+		case WII_CONTROLLER_CLASSIC:
+			if (button_event->button == 0) action = WII_TEXT_INPUT_CONFIRM;    // A
+			else if (button_event->button == 1) action = WII_TEXT_INPUT_DELETE;  // B
+			else if (button_event->button == 10) action = WII_TEXT_INPUT_CANCEL; // Y
+			break;
+
+		default:
+			break;
+	}
+
+	if (action == WII_TEXT_INPUT_NONE) return false;
+	wii_text_input_controller_mode = true;
+	wii_text_pending_action = action;
+	return true;
+}
+#endif
+
 // seg009:000D
 int read_key() {
 	// stub
@@ -1715,6 +1769,80 @@ void draw_text_cursor(int xpos,int ypos,int color) {
 	textstate.textcolor = 15;
 }
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+static const char* const wii_text_character_groups[] = {
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+	"abcdefghijklmnopqrstuvwxyz",
+	"0123456789",
+	" _-.'",
+};
+
+enum {
+	WII_TEXT_NAV_NONE = 0,
+	WII_TEXT_NAV_LEFT,
+	WII_TEXT_NAV_RIGHT,
+	WII_TEXT_NAV_UP,
+	WII_TEXT_NAV_DOWN,
+};
+
+static void wii_draw_text_candidate(const rect_type* rect, int xpos, int ypos,
+		char candidate, bool show_candidate, int color, int bgcolor) {
+	rect_type tail = *rect;
+	tail.left = xpos;
+	if (tail.left < tail.right) draw_rect(&tail, bgcolor);
+
+	set_curr_pos(xpos, ypos);
+	textstate.textcolor = color;
+	if (show_candidate && get_char_width('_') + get_char_width(candidate) + xpos < rect->right) {
+		draw_text_character(candidate);
+	} else {
+		draw_text_character('_');
+	}
+	textstate.textcolor = 15;
+}
+
+static int wii_get_text_navigation(bool* released, Uint64* timeout_counter) {
+	int joy_x = 0;
+	int joy_y = 0;
+
+	if (joy_button_states[JOYINPUT_DPAD_LEFT] & KEYSTATE_HELD) joy_x = -1;
+	else if (joy_button_states[JOYINPUT_DPAD_RIGHT] & KEYSTATE_HELD) joy_x = 1;
+	if (joy_button_states[JOYINPUT_DPAD_UP] & KEYSTATE_HELD) joy_y = -1;
+	else if (joy_button_states[JOYINPUT_DPAD_DOWN] & KEYSTATE_HELD) joy_y = 1;
+
+	const int y_threshold = 14000;
+	const int x_threshold = 26000;
+	if (joy_axis[SDL_CONTROLLER_AXIS_LEFTY] < -y_threshold) joy_y = -1;
+	else if (joy_axis[SDL_CONTROLLER_AXIS_LEFTY] > y_threshold) joy_y = 1;
+	else if (joy_axis[SDL_CONTROLLER_AXIS_LEFTX] < -x_threshold) joy_x = -1;
+	else if (joy_axis[SDL_CONTROLLER_AXIS_LEFTX] > x_threshold) joy_x = 1;
+
+	if (joy_x == 0 && joy_y == 0) {
+		*released = true;
+		*timeout_counter = 0;
+		return WII_TEXT_NAV_NONE;
+	}
+
+	float needed_timeout_s = 0.1f;
+	if (*released) {
+		needed_timeout_s = 0.3f;
+		*released = false;
+	}
+
+	Uint64 current_counter = SDL_GetPerformanceCounter();
+	if (current_counter <= *timeout_counter) return WII_TEXT_NAV_NONE;
+
+	*timeout_counter = current_counter +
+		(Uint64)((float)SDL_GetPerformanceFrequency() * needed_timeout_s);
+	wii_text_input_controller_mode = true;
+
+	if (joy_x < 0) return WII_TEXT_NAV_LEFT;
+	if (joy_x > 0) return WII_TEXT_NAV_RIGHT;
+	if (joy_y < 0) return WII_TEXT_NAV_UP;
+	return WII_TEXT_NAV_DOWN;
+}
+#endif
+
 // seg009:053C
 int input_str(const rect_type* rect,char* buffer,int max_length,const char *initial,int has_initial,int arg_4,int color,int bgcolor) {
 	// Display the screen keyboard if supported.
@@ -1741,6 +1869,118 @@ int input_str(const rect_type* rect,char* buffer,int max_length,const char *init
 	draw_cstring(initial);
 	//restore_curr_pos?();
 	current_xpos += get_cstring_width(initial) + (init_length != 0) * arg_4;
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	int selected_group = 0;
+	int selected_index = 0;
+	bool joy_xy_released = true;
+	Uint64 joy_xy_timeout_counter = 0;
+	wii_text_input_active = true;
+	wii_text_input_controller_mode = (sdl_controller_ != NULL);
+	wii_text_pending_action = WII_TEXT_INPUT_NONE;
+
+	do {
+		key = 0;
+		int navigation = WII_TEXT_NAV_NONE;
+
+		do {
+			const char* group = wii_text_character_groups[selected_group];
+			char candidate = group[selected_index];
+			if (wii_text_input_controller_mode) {
+				wii_draw_text_candidate(rect, current_xpos, ypos, candidate, cursor_visible, color, bgcolor);
+			} else if (cursor_visible) {
+				draw_text_cursor(current_xpos, ypos, color);
+			} else {
+				draw_text_cursor(current_xpos, ypos, bgcolor);
+			}
+			cursor_visible = !cursor_visible;
+			start_timer(timer_0, 6);
+
+			while (!has_timer_stopped(timer_0)) {
+				key = key_test_quit();
+				if (key || wii_text_pending_action != WII_TEXT_INPUT_NONE) break;
+				navigation = wii_get_text_navigation(&joy_xy_released, &joy_xy_timeout_counter);
+				if (navigation != WII_TEXT_NAV_NONE) break;
+				idle();
+			}
+		} while (key == 0 && wii_text_pending_action == WII_TEXT_INPUT_NONE && navigation == WII_TEXT_NAV_NONE);
+
+		// Remove the blinking cursor/candidate before changing the confirmed text.
+		rect_type tail = *rect;
+		tail.left = current_xpos;
+		if (tail.left < tail.right) draw_rect(&tail, bgcolor);
+
+		wii_text_input_action action = wii_text_pending_action;
+		wii_text_pending_action = WII_TEXT_INPUT_NONE;
+		char entered_char = last_text_input <= 0x7E ? last_text_input : 0;
+		clear_kbd_buf();
+
+		if (action == WII_TEXT_INPUT_FINISH || key == SDL_SCANCODE_RETURN) {
+			buffer[length] = 0;
+			wii_text_input_active = false;
+			wii_text_input_controller_mode = false;
+			SDL_StopTextInput();
+			return length;
+		}
+		if (action == WII_TEXT_INPUT_CANCEL || key == SDL_SCANCODE_ESCAPE) {
+			draw_rect(rect, bgcolor);
+			buffer[0] = 0;
+			wii_text_input_active = false;
+			wii_text_input_controller_mode = false;
+			SDL_StopTextInput();
+			return -1;
+		}
+
+		if (navigation != WII_TEXT_NAV_NONE) {
+			int group_count = (int)(sizeof(wii_text_character_groups) / sizeof(wii_text_character_groups[0]));
+			if (navigation == WII_TEXT_NAV_UP || navigation == WII_TEXT_NAV_DOWN) {
+				selected_group += navigation == WII_TEXT_NAV_UP ? -1 : 1;
+				if (selected_group < 0) selected_group = group_count - 1;
+				if (selected_group >= group_count) selected_group = 0;
+				int new_group_length = strlen(wii_text_character_groups[selected_group]);
+				if (selected_index >= new_group_length) selected_index = new_group_length - 1;
+			} else {
+				int group_length = strlen(wii_text_character_groups[selected_group]);
+				selected_index += navigation == WII_TEXT_NAV_LEFT ? -1 : 1;
+				if (selected_index < 0) selected_index = group_length - 1;
+				if (selected_index >= group_length) selected_index = 0;
+			}
+			cursor_visible = 1; // Show the newly selected candidate immediately.
+			continue;
+		}
+
+		if (action == WII_TEXT_INPUT_DELETE || (length != 0 &&
+				(key == SDL_SCANCODE_BACKSPACE || key == SDL_SCANCODE_DELETE))) {
+			if (length != 0) {
+				--length;
+				current_xpos -= get_char_width(buffer[length]);
+				set_curr_pos(current_xpos, ypos);
+				textstate.textcolor = bgcolor;
+				draw_text_character(buffer[length]);
+				textstate.textcolor = 15;
+			}
+			cursor_visible = 1;
+			continue;
+		}
+
+		if (action == WII_TEXT_INPUT_CONFIRM) {
+			entered_char = wii_text_character_groups[selected_group][selected_index];
+		}
+
+		if (entered_char >= 0x20 && entered_char <= 0x7E && length < max_length) {
+			// Would the new character make the cursor go past the right side of the rect?
+			if (get_char_width('_') + get_char_width(entered_char) + current_xpos < rect->right) {
+				set_curr_pos(current_xpos, ypos);
+				textstate.textcolor = color;
+				buffer[length] = entered_char;
+				length++;
+				current_xpos += draw_text_character(entered_char);
+				textstate.textcolor = 15;
+			}
+		}
+		cursor_visible = 1;
+	} while(1);
+#else
 	do {
 		key = 0;
 		do {
@@ -1797,6 +2037,7 @@ int input_str(const rect_type* rect,char* buffer,int max_length,const char *init
 			}
 		}
 	} while(1);
+#endif
 }
 
 #else // USE_TEXT
@@ -3678,6 +3919,9 @@ void process_events() {
 			{
 				int modifier = event.key.keysym.mod;
 				int scancode = event.key.keysym.scancode;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				if (wii_text_input_active) wii_text_input_controller_mode = false;
+#endif
 
 				// Handle these separately, so they won't interrupt things that are usually interrupted by a keypress. (pause, cutscene)
 #ifdef USE_FAST_FORWARD
@@ -3806,6 +4050,11 @@ void process_events() {
 					joy_axis[event.caxis.axis] = event.caxis.value;
 					if (abs(event.caxis.value) > abs(joy_axis_max[event.caxis.axis]))
 						joy_axis_max[event.caxis.axis] = event.caxis.value;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+					if (wii_text_input_active && abs(event.caxis.value) >= joystick_threshold) {
+						wii_text_input_controller_mode = true;
+					}
+#endif
 
 #ifdef USE_AUTO_INPUT_MODE
 					if (!is_joyst_mode && (event.caxis.value >= joystick_threshold || event.caxis.value <= -joystick_threshold)) {
@@ -3920,6 +4169,22 @@ void process_events() {
 					break;
 				}
 
+				if (wii_text_input_active) {
+					wii_text_input_controller_mode = true;
+
+					if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
+						wii_text_pending_action = WII_TEXT_INPUT_FINISH;
+						break;
+					}
+
+					if (wii_input_is_face_button(event.cbutton.button)) {
+						/* Text face buttons are handled from the raw joystick event below.
+						 * This keeps them tied to the current physical Wii expansion even
+						 * if SDL's GameController mapping is temporarily stale. */
+						break;
+					}
+				}
+
 #ifdef USE_MENU
 				/* Keep the original D-pad and analog menu processing. Only face
 				 * buttons are translated here to avoid leaking gameplay actions. */
@@ -4022,6 +4287,11 @@ void process_events() {
 			case SDL_JOYBUTTONDOWN:
 			case SDL_JOYBUTTONUP:
 			case SDL_JOYAXISMOTION:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				if (event.type == SDL_JOYBUTTONDOWN && wii_handle_text_raw_button(&event.jbutton)) {
+					break;
+				}
+#endif
 				// Only handle the event if the joystick is incompatible with the SDL_GameController interface.
 				// (Otherwise it will interfere with the normal action of the SDL_GameController API.)
 				if (!using_sdl_joystick_interface) {
@@ -4065,6 +4335,9 @@ void process_events() {
 				break;
 
 			case SDL_TEXTINPUT:
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				if (wii_text_input_active) wii_text_input_controller_mode = false;
+#endif
 				last_text_input = event.text.text[0]; // UTF-8 formatted char text input
 
 				// Make the +/- keys work on the main keyboard, on any keyboard layout.

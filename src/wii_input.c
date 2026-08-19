@@ -8,6 +8,12 @@ The SDL event loop remains responsible for reading and storing input states.
 
 #include "wii_input.h"
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#include <gccore.h>
+#include <wiiuse/wpad.h>
+#endif
+
+#include <stdio.h>
 #include <string.h>
 
 static SDL_GameControllerButtonBind get_button_bind(
@@ -77,6 +83,32 @@ wii_controller_kind wii_input_get_controller_kind(SDL_GameController* controller
 	}
 
 	return WII_CONTROLLER_NUNCHUK;
+}
+
+wii_controller_kind wii_input_get_physical_controller_kind(SDL_Joystick* joystick) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (joystick == NULL) return WII_CONTROLLER_NONE;
+
+	const char* name = SDL_JoystickName(joystick);
+	int channel = -1;
+	if (name == NULL || sscanf(name, "Wiimote %d", &channel) != 1 ||
+			channel < WPAD_CHAN_0 || channel > WPAD_CHAN_3) {
+		return WII_CONTROLLER_NONE;
+	}
+
+	WPADData* data = WPAD_Data(channel);
+	if (data == NULL || data->err == WPAD_ERR_NO_CONTROLLER) return WII_CONTROLLER_NONE;
+
+	switch (data->exp.type) {
+		case WPAD_EXP_NUNCHUK: return WII_CONTROLLER_NUNCHUK;
+		case WPAD_EXP_CLASSIC: return WII_CONTROLLER_CLASSIC;
+		case WPAD_EXP_NONE: return WII_CONTROLLER_REMOTE;
+		default: return WII_CONTROLLER_NONE;
+	}
+#else
+	(void)joystick;
+	return WII_CONTROLLER_NONE;
+#endif
 }
 
 wii_gameplay_action wii_input_get_gameplay_action(wii_controller_kind kind, Uint8 button) {

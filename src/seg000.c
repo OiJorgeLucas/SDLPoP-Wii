@@ -2868,6 +2868,20 @@ void show_quotes() {
 const rect_type splash_text_1_rect = {0, 0, 50, 320};
 const rect_type splash_text_2_rect = {50, 0, 200, 320};
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+const char* splash_text_1 = "SDLPoP Wii 1.0";
+const char* splash_text_2 =
+                "Nintendo Wii port by OiJorgeLucas.\n"
+                "\n"
+                "Wii Remote, Nunchuk, Classic Controller\n"
+                "and USB keyboard are supported.\n"
+                "\n"
+                "Mods, replays and recording are supported.\n"
+                "\n"
+                "See README.md for setup, controls and credits.\n"
+                "\n"
+                "Press any button...";
+#else
 const char* splash_text_1 = "SDLPoP " SDLPOP_VERSION;
 const char* splash_text_2 =
 		"In-game, Esc opens a settings/quicksave menu.\n"
@@ -2884,6 +2898,7 @@ const char* splash_text_2 =
 		"Questions? Visit https://forum.princed.org\n"
 		"\n"
 		"Press any key to continue...";
+#endif
 
 void show_splash() {
 	if (!enable_info_screen || start_level >= 0) return;

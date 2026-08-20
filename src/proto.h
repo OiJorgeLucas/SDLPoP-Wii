@@ -526,6 +526,7 @@ bool file_exists(const char* filename);
 #define locate_save_file(filename) locate_save_file_(filename, alloca(POP_MAX_PATH), POP_MAX_PATH)
 const char* locate_file_(const char* filename, char* path_buffer, int buffer_size);
 const char* locate_save_file_(const char* filename, char* path_buffer, int buffer_size);
+const char* get_exe_dir(void);
 
 #ifdef _WIN32
 

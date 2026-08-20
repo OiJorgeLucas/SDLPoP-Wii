@@ -2972,12 +2972,15 @@ const char* get_writable_file_path(char* custom_path_buffer, size_t max_len, con
 	const char* save_path = NULL;
 	struct stat path_stat;
 
-	if (custom_save_path != NULL && custom_save_path[0] != '\0')
+	if (custom_save_path != NULL && custom_save_path[0] != '\0') {
 		save_path = custom_save_path;
-	else if (stat("sd:/apps/sdlpop", &path_stat) == 0 && S_ISDIR(path_stat.st_mode))
-		save_path = "sd:/apps/sdlpop";
-	else
-		save_path = "usb:/apps/sdlpop";
+	} else {
+		const char* app_path = get_exe_dir();
+		if (app_path != NULL &&
+			stat(app_path, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
+			save_path = app_path;
+		}
+	}
 #elif defined WIN32 || _WIN32 || WIN64 || _WIN64
 	const char* save_path = getenv("SDLPOP_SAVE_PATH");
 #else

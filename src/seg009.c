@@ -78,8 +78,20 @@ void find_exe_dir(void) {
 	if (last_slash != NULL) {
 		*last_slash = '\0';
 	}
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	else {
+		/* Homebrew launchers normally pass the full DOL path, but keep a
+		 * sane portable fallback if argv[0] contains only "boot.dol". */
+		snprintf_check(exe_dir, sizeof(exe_dir), ".");
+	}
+#endif
 #endif
 	found_exe_dir = true;
+}
+
+const char* get_exe_dir(void) {
+	find_exe_dir();
+	return exe_dir;
 }
 
 #if ! (defined WIN32 || _WIN32 || WIN64 || _WIN64)
@@ -106,13 +118,9 @@ bool file_exists(const char* filename) {
 const char* find_first_file_match(char* dst, int size, char* format, const char* filename) {
 	find_exe_dir();
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-	const char* dirs[3] = {"sd:/apps/sdlpop", "usb:/apps/sdlpop", exe_dir};
-	for (int i = 0; i < 3; i++) {
-		snprintf_check(dst, size, format, dirs[i], filename);
-		if(file_exists(dst))
-			return (const char*) dst;
-	}
-	snprintf_check(dst, size, format, dirs[0], filename);
+	/* Wii installations are portable: resolve relative files from the
+	 * directory that contains the running boot.dol, whatever its name is. */
+	snprintf_check(dst, size, format, exe_dir, filename);
 #elif defined WIN32 || _WIN32 || WIN64 || _WIN64
 	snprintf_check(dst, size, format, exe_dir, filename);
 #else
@@ -131,16 +139,12 @@ const char* find_first_file_match(char* dst, int size, char* format, const char*
 const char* locate_save_file_(const char* filename, char* dst, int size) {
 	find_exe_dir();
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-	const char* dirs[3] = {"sd:/apps/sdlpop", "usb:/apps/sdlpop", exe_dir};
-	for (int i = 0; i < 3; i++) {
-		struct stat path_stat;
-		int result = stat(dirs[i], &path_stat);
-		if (result == 0 && S_ISDIR(path_stat.st_mode)) {
-			snprintf_check(dst, size, "%s/%s", dirs[i], filename);
-			return (const char*) dst;
-		}
+	struct stat path_stat;
+	if (stat(exe_dir, &path_stat) == 0 && S_ISDIR(path_stat.st_mode)) {
+		snprintf_check(dst, size, "%s/%s", exe_dir, filename);
+	} else {
+		snprintf_check(dst, size, "%s", filename);
 	}
-	snprintf_check(dst, size, "%s/%s", dirs[0], filename);
 #elif defined WIN32 || _WIN32 || WIN64 || _WIN64
 	snprintf_check(dst, size, "%s/%s", exe_dir, filename);
 #else
@@ -167,6 +171,130 @@ const char* locate_file_(const char* filename, char* path_buffer, int buffer_siz
 		return find_first_file_match(path_buffer, buffer_size, "%s/%s", filename);
 	}
 }
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+/*
+ * Wii FAT/USB directory lookups are expensive. Resource loading used to call
+ * locate_file() for every sprite which, on a miss, probes the current path and
+ * up to three application roots before fopen() probes the selected path again.
+ *
+ * Cache directory contents once and answer resource-existence checks in RAM.
+ * The actual file is still opened normally, so resource decoding and DAT/
+ * directory fallback semantics remain unchanged.
+ */
+typedef struct wii_resource_directory_cache_type {
+	char path[POP_MAX_PATH];
+	char** filenames;
+	size_t count;
+	size_t capacity;
+	bool complete;
+	struct wii_resource_directory_cache_type* next;
+} wii_resource_directory_cache_type;
+
+static wii_resource_directory_cache_type* wii_resource_directory_cache = NULL;
+
+static wii_resource_directory_cache_type* wii_get_resource_directory_cache(
+	const char* directory
+) {
+	for (wii_resource_directory_cache_type* entry = wii_resource_directory_cache;
+		entry != NULL; entry = entry->next) {
+		if (strcasecmp(entry->path, directory) == 0) return entry;
+	}
+
+	wii_resource_directory_cache_type* entry =
+		(wii_resource_directory_cache_type*)calloc(1, sizeof(*entry));
+	if (entry == NULL) return NULL;
+
+	snprintf_check(entry->path, sizeof(entry->path), "%s", directory);
+	entry->complete = true;
+
+	DIR* directory_handle = opendir(directory);
+	if (directory_handle != NULL) {
+		struct dirent* dir_entry;
+		while ((dir_entry = readdir(directory_handle)) != NULL) {
+			if (strcmp(dir_entry->d_name, ".") == 0 ||
+				strcmp(dir_entry->d_name, "..") == 0) {
+				continue;
+			}
+
+			if (entry->count == entry->capacity) {
+				size_t new_capacity = entry->capacity == 0 ? 32 : entry->capacity * 2;
+				char** new_filenames = (char**)realloc(
+					entry->filenames, new_capacity * sizeof(*new_filenames));
+				if (new_filenames == NULL) {
+					entry->complete = false;
+					break;
+				}
+				entry->filenames = new_filenames;
+				entry->capacity = new_capacity;
+			}
+
+			entry->filenames[entry->count] = strdup(dir_entry->d_name);
+			if (entry->filenames[entry->count] == NULL) {
+				entry->complete = false;
+				break;
+			}
+			++entry->count;
+		}
+		closedir(directory_handle);
+	}
+
+	entry->next = wii_resource_directory_cache;
+	wii_resource_directory_cache = entry;
+	return entry;
+}
+
+/* Returns 1 if present, 0 if absent, -1 if caching failed. */
+static int wii_resource_directory_contains(const char* directory, const char* filename) {
+	wii_resource_directory_cache_type* entry =
+		wii_get_resource_directory_cache(directory);
+	if (entry == NULL || !entry->complete) return -1;
+
+	for (size_t index = 0; index < entry->count; ++index) {
+		if (strcasecmp(entry->filenames[index], filename) == 0) return 1;
+	}
+	return 0;
+}
+
+static FILE* wii_fopen_cached_resource(const char* filename, bool search_app_roots) {
+	const char* slash = strrchr(filename, '/');
+	if (slash == NULL || slash == filename || slash[1] == '\0') {
+		return fopen(filename, "rb");
+	}
+
+	size_t directory_length = (size_t)(slash - filename);
+	if (directory_length >= POP_MAX_PATH) return fopen(filename, "rb");
+
+	char directory[POP_MAX_PATH];
+	memcpy(directory, filename, directory_length);
+	directory[directory_length] = '\0';
+	const char* basename = slash + 1;
+
+	int contains = wii_resource_directory_contains(directory, basename);
+	if (contains > 0) return fopen(filename, "rb");
+	if (contains < 0) return fopen(locate_file(filename), "rb");
+	if (!search_app_roots) return NULL;
+
+	find_exe_dir();
+	char rooted_directory[POP_MAX_PATH];
+	char rooted_filename[POP_MAX_PATH];
+	snprintf_check(rooted_directory, sizeof(rooted_directory),
+		"%s/%s", exe_dir, directory);
+
+	contains = wii_resource_directory_contains(rooted_directory, basename);
+	if (contains > 0) {
+		snprintf_check(rooted_filename, sizeof(rooted_filename),
+			"%s/%s", rooted_directory, basename);
+		return fopen(rooted_filename, "rb");
+	}
+	if (contains < 0) {
+		snprintf_check(rooted_filename, sizeof(rooted_filename),
+			"%s/%s", rooted_directory, basename);
+		return fopen(rooted_filename, "rb");
+	}
+	return NULL;
+}
+#endif
 
 #ifdef _WIN32
 // These macros are from the SDL2 source. (src/core/windows/SDL_windows.h)
@@ -3356,7 +3484,11 @@ void load_from_opendats_metadata(int resource_id, const char* extension, FILE** 
 			snprintf_check(image_filename,sizeof(image_filename),"data/%s/res%d.%s",filename_no_ext, resource_id, extension);
 			if (!use_custom_levelset) {
 				//printf("loading (binary) %s",image_filename);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+				fp = wii_fopen_cached_resource(image_filename, true);
+#else
 				fp = fopen(locate_file(image_filename), "rb");
+#endif
 			}
 			else {
 				if (!skip_mod_data_files) {
@@ -3364,10 +3496,18 @@ void load_from_opendats_metadata(int resource_id, const char* extension, FILE** 
 					// before checking data/, first try mods/MODNAME/data/
 					snprintf_check(image_filename_mod, sizeof(image_filename_mod), "%s/%s", mod_data_path, image_filename);
 					//printf("loading (binary) %s",image_filename_mod);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+					fp = wii_fopen_cached_resource(image_filename_mod, false);
+#else
 					fp = fopen(locate_file(image_filename_mod), "rb");
+#endif
 				}
 				if (fp == NULL && !skip_normal_data_files) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+					fp = wii_fopen_cached_resource(image_filename, true);
+#else
 					fp = fopen(locate_file(image_filename), "rb");
+#endif
 				}
 			}
 

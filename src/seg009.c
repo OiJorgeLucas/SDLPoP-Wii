@@ -173,6 +173,8 @@ const char* locate_file_(const char* filename, char* path_buffer, int buffer_siz
 }
 
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+static void wii_free_kid_resource_cache(void);
+
 /*
  * Wii FAT/USB directory lookups are expensive. Resource loading used to call
  * locate_file() for every sprite which, on a miss, probes the current path and
@@ -254,6 +256,20 @@ static int wii_resource_directory_contains(const char* directory, const char* fi
 		if (strcasecmp(entry->filenames[index], filename) == 0) return 1;
 	}
 	return 0;
+}
+
+static void wii_free_resource_directory_cache(void) {
+	wii_resource_directory_cache_type* entry = wii_resource_directory_cache;
+	while (entry != NULL) {
+		wii_resource_directory_cache_type* next = entry->next;
+		for (size_t index = 0; index < entry->count; ++index) {
+			free(entry->filenames[index]);
+		}
+		free(entry->filenames);
+		free(entry);
+		entry = next;
+	}
+	wii_resource_directory_cache = NULL;
 }
 
 static FILE* wii_fopen_cached_resource(const char* filename, bool search_app_roots) {
@@ -593,6 +609,8 @@ void quit(int exit_code) {
 void restore_stuff() {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 	free_wii_environment_cache();
+	wii_free_kid_resource_cache();
+	wii_free_resource_directory_cache();
 #endif
 	SDL_Quit();
 }
@@ -3552,10 +3570,110 @@ void close_dat(dat_type* pointer) {
 	// stub
 }
 
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+/*
+ * Extracted KID graphics are only ~70 KiB but are split across roughly 220
+ * files. Keep their raw bytes after the first original-game load so replay
+ * reloads can rebuild a fresh chtab without repeating hundreds of SD reads.
+ * The live chtab/SDL surfaces are never cached here.
+ */
+typedef struct wii_kid_resource_cache_entry_type {
+	int resource;
+	char extension[16];
+	void* data;
+	int size;
+	struct wii_kid_resource_cache_entry_type* next;
+} wii_kid_resource_cache_entry_type;
+
+static wii_kid_resource_cache_entry_type* wii_kid_resource_cache = NULL;
+
+static bool wii_is_original_extracted_kid_dat(const dat_type* pointer) {
+	return !use_custom_levelset &&
+		pointer != NULL &&
+		pointer->handle == NULL &&
+		strcasecmp(pointer->filename, "KID.DAT") == 0;
+}
+
+static wii_kid_resource_cache_entry_type* wii_find_kid_resource_cache_entry(
+	int resource, const char* extension
+) {
+	for (wii_kid_resource_cache_entry_type* entry = wii_kid_resource_cache;
+		entry != NULL; entry = entry->next) {
+		if (entry->resource == resource &&
+			strcasecmp(entry->extension, extension) == 0) {
+			return entry;
+		}
+	}
+	return NULL;
+}
+
+static void* wii_copy_cached_kid_resource(
+	int resource, const char* extension, int* out_size
+) {
+	if (!wii_is_original_extracted_kid_dat(dat_chain_ptr)) return NULL;
+
+	wii_kid_resource_cache_entry_type* entry =
+		wii_find_kid_resource_cache_entry(resource, extension);
+	if (entry == NULL) return NULL;
+
+	void* area = malloc(entry->size);
+	if (area == NULL) return NULL;
+	memcpy(area, entry->data, entry->size);
+	if (out_size != NULL) *out_size = entry->size;
+	return area;
+}
+
+static void wii_store_kid_resource(
+	int resource, const char* extension, const void* data, int size
+) {
+	if (data == NULL || size <= 0 ||
+		wii_find_kid_resource_cache_entry(resource, extension) != NULL) {
+		return;
+	}
+
+	wii_kid_resource_cache_entry_type* entry =
+		(wii_kid_resource_cache_entry_type*)calloc(1, sizeof(*entry));
+	if (entry == NULL) return;
+
+	entry->data = malloc(size);
+	if (entry->data == NULL) {
+		free(entry);
+		return;
+	}
+
+	memcpy(entry->data, data, size);
+	entry->resource = resource;
+	entry->size = size;
+	snprintf_check(entry->extension, sizeof(entry->extension), "%s", extension);
+	entry->next = wii_kid_resource_cache;
+	wii_kid_resource_cache = entry;
+}
+
+static void wii_free_kid_resource_cache(void) {
+	wii_kid_resource_cache_entry_type* entry = wii_kid_resource_cache;
+	while (entry != NULL) {
+		wii_kid_resource_cache_entry_type* next = entry->next;
+		free(entry->data);
+		free(entry);
+		entry = next;
+	}
+	wii_kid_resource_cache = NULL;
+}
+#endif
+
 // seg009:9F80
 void *load_from_opendats_alloc(int resource, const char* extension, data_location* out_result, int* out_size) {
 	// stub
 	//printf("id = %d\n",resource);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	int cached_size = 0;
+	void* cached_area = wii_copy_cached_kid_resource(resource, extension, &cached_size);
+	if (cached_area != NULL) {
+		if (out_result != NULL) *out_result = data_directory;
+		if (out_size != NULL) *out_size = cached_size;
+		return cached_area;
+	}
+#endif
 	dat_type* pointer;
 	data_location result;
 	byte checksum;
@@ -3574,6 +3692,12 @@ void *load_from_opendats_alloc(int resource, const char* extension, data_locatio
 		free(area);
 		area = NULL;
 	}
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (area != NULL && result == data_directory &&
+		wii_is_original_extracted_kid_dat(pointer)) {
+		wii_store_kid_resource(resource, extension, area, size);
+	}
+#endif
 	if (result == data_directory) fclose(fp);
 	/* XXX: check checksum */
 	return area;

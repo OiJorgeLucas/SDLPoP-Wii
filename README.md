@@ -321,8 +321,6 @@ unzip -l SDLPoP-Wii-1.0.zip
 * [Alberto Mardegan (mardy)](https://github.com/mardy) — for his Wii/GameCube SDL2 work, which was an important reference for this port.
 * **devkitPro / libogc** — for the Wii development toolchain and libraries used by this port.
 
-See [`doc/THIRD_PARTY_NOTICES.md`](doc/THIRD_PARTY_NOTICES.md) for additional third-party attribution and license information.
-
 ## Special Thanks
 
 * [Ismael Cardoso](https://github.com/ismaelcardosos), my cousin, for introducing me to AI tools and teaching me how to use them to accelerate my learning and development process. His guidance made this port possible much sooner than it otherwise would have been.
@@ -355,3 +353,5 @@ The following source files are external components with their own licenses:
 * `src/opl3.c`
 * `src/opl3.h`
 * `src/stb_vorbis.c`
+
+See [`doc/THIRD_PARTY_NOTICES.md`](doc/THIRD_PARTY_NOTICES.md) for additional third-party attribution and license information.

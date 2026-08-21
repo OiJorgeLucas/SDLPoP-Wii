@@ -355,9 +355,3 @@ The following source files are external components with their own licenses:
 * `src/opl3.c`
 * `src/opl3.h`
 * `src/stb_vorbis.c`
-
-For third-party software used by the Nintendo Wii build, see:
-
-```text
-doc/THIRD_PARTY_NOTICES.md
-```

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<app version="1">
+  <name>SDLPoP Wii</name>
+  <coder>OiJorgeLucas</coder>
+  <version>1.0</version>
+  <short_description>SDLPoP (Prince of Persia port) for Nintendo Wii</short_description>
+  <long_description>Nintendo Wii port of SDLPoP, an open-source port of Prince of Persia.
+
+Supports Wii Remote, Nunchuk, Classic Controller and USB keyboard, as well as mods, replays and replay recording.
+  </long_description>
+</app>

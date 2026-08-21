@@ -98,3 +98,5 @@ screenshots/
 
 # Wii test package
 /dist-wii/
+build-wii.log
+SDLPoP-Wii-*.zip

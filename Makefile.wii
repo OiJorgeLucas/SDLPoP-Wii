@@ -1,4 +1,4 @@
-# SDLPoP Wii build experiment
+# SDLPoP Wii build
 
 DEVKITPRO ?= /opt/devkitpro
 DEVKITPPC ?= $(DEVKITPRO)/devkitPPC

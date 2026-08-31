@@ -97,6 +97,9 @@ NAMES_LIST(tile_type_names, {
 				"torch_with_debris", // 30
 });
 NAMES_LIST(scaling_type_names, {"sharp", "fuzzy", "blurry"});
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+NAMES_LIST(wii_aspect_correction_names, {"off", "16:10", "4:3"});
+#endif
 NAMES_LIST(row_names, {"top", "middle", "bottom"});
 KEY_VALUE_LIST(direction_names, {{"left", dir_FF_left}, {"right", dir_0_right}});
 NAMES_LIST(entry_pose_names, {"turning", "falling", "running"});
@@ -194,7 +197,11 @@ static int global_ini_callback(const char *section, const char *name, const char
 		process_word("pop_window_width", &pop_window_width, NULL);
 		process_word("pop_window_height", &pop_window_height, NULL);
 		process_byte("use_hardware_acceleration", &use_hardware_acceleration, &use_hardware_acceleration_names_list);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		process_byte("wii_aspect_correction", &wii_aspect_correction, &wii_aspect_correction_names_list);
+#else
 		process_boolean("use_correct_aspect_ratio", &use_correct_aspect_ratio);
+#endif
 		process_boolean("use_integer_scaling", &use_integer_scaling);
 		process_byte("scaling_type", &scaling_type, &scaling_type_names_list);
 		process_boolean("enable_controller_rumble", &enable_controller_rumble);
@@ -481,8 +488,15 @@ void set_options_to_default() {
 	start_fullscreen = 0;
 	use_hardware_acceleration = 2;
 	use_correct_aspect_ratio = 0;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_aspect_correction = WII_ASPECT_CORRECTION_DEFAULT;
+#endif
 	use_integer_scaling = 0;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	scaling_type = WII_SCALING_TYPE_DEFAULT;
+#else
 	scaling_type = 0;
+#endif
 	enable_controller_rumble = 1;
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 	joystick_only_horizontal = 0;

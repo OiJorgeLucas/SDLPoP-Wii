@@ -746,8 +746,25 @@ extern byte use_hardware_acceleration INIT(= 1);
 extern byte use_hardware_acceleration INIT(= 2);
 #endif
 extern byte use_correct_aspect_ratio INIT(= 0);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#ifndef WII_ASPECT_CORRECTION_TYPE_DEFINED
+#define WII_ASPECT_CORRECTION_TYPE_DEFINED
+enum wii_aspect_correction_type {
+	WII_ASPECT_CORRECTION_OFF = 0,
+	WII_ASPECT_CORRECTION_16_10 = 1,
+	WII_ASPECT_CORRECTION_4_3 = 2,
+	WII_ASPECT_CORRECTION_DEFAULT = 0xFF,
+};
+#define WII_SCALING_TYPE_DEFAULT 0xFF
+#endif
+extern byte wii_aspect_correction INIT(= WII_ASPECT_CORRECTION_DEFAULT);
+#endif
 extern byte use_integer_scaling INIT(= 0);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+extern byte scaling_type INIT(= WII_SCALING_TYPE_DEFAULT);
+#else
 extern byte scaling_type INIT(= 0);
+#endif
 #ifdef USE_LIGHTING
 extern byte enable_lighting INIT(= 0);
 extern image_type* lighting_mask;

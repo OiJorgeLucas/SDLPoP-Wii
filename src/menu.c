@@ -361,6 +361,9 @@ setting_type general_settings[] = {
 
 NAMES_LIST(use_hardware_acceleration_setting_names, {"OFF", "ON", "AUTO",});
 NAMES_LIST(scaling_type_setting_names, {"Sharp", "Fuzzy", "Blurry",});
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+NAMES_LIST(wii_aspect_correction_setting_names, {"Off", "16:10", "4:3",});
+#endif
 
 int integer_scaling_possible =
 #if SDL_VERSION_ATLEAST(2,0,5) // SDL_RenderSetIntegerScale
@@ -383,11 +386,15 @@ setting_type visuals_settings[] = {
 				               "On - Force hardware acceleration.\n"
 				               "Off - Disable hardware acceleration.\n"
 				               "Note: This requires a restart."},
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		{.id = SETTING_USE_CORRECT_ASPECT_RATIO, .style = SETTING_STYLE_NUMBER, .number_type = SETTING_BYTE, .max = 2,
+				.linked = &wii_aspect_correction, .names_list = &wii_aspect_correction_setting_names_list,
+				.text = "Aspect correction",
+				.explanation = "Adjust the game's aspect ratio to reduce Wii widescreen stretching. "
+						"Has no effect when Wii is set to 4:3."},
+#else
 		{.id = SETTING_USE_CORRECT_ASPECT_RATIO, .style = SETTING_STYLE_TOGGLE, .linked = &use_correct_aspect_ratio,
 				.text = "Use 4:3 aspect ratio",
-#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-				.explanation = "Render the game with reduced horizontal stretching."},
-#else
 				.explanation = "Render the game in the originally intended 4:3 aspect ratio."
 				               "\nNB. Works best using a high resolution."},
 #endif
@@ -2376,7 +2383,11 @@ void process_ingame_settings_user_managed(SDL_RWops* rw, rw_process_func_type pr
 	process(enable_replay);
 	process(start_fullscreen);
 	process(use_hardware_acceleration);
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	process(wii_aspect_correction);
+#else
 	process(use_correct_aspect_ratio);
+#endif
 	process(use_integer_scaling);
 	process(scaling_type);
 	process(enable_fade);

@@ -3011,9 +3011,24 @@ void apply_aspect_ratio() {
 	// Allow us to use a consistent set of screen co-ordinates, even if the screen size changes
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 	/*
+	 * Resolve Wii defaults only after the console configuration is available.
+	 * A fresh build starts with the PC-like 16:10/Fuzzy combination on a 16:9
+	 * Wii, and Off/Sharp on a 4:3 Wii. Explicit INI/CFG values (0..2) are kept.
+	 */
+	if (wii_aspect_correction > WII_ASPECT_CORRECTION_4_3 || scaling_type > 2) {
+		bool wii_is_widescreen = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
+		if (wii_aspect_correction > WII_ASPECT_CORRECTION_4_3) {
+			wii_aspect_correction = wii_is_widescreen ?
+				WII_ASPECT_CORRECTION_16_10 : WII_ASPECT_CORRECTION_OFF;
+		}
+		if (scaling_type > 2) {
+			scaling_type = wii_is_widescreen ? 1 : 0; // Fuzzy on 16:9, Sharp on 4:3.
+		}
+	}
+
+	/*
 	 * Keep the Wii renderer on the known-good 320x200 logical canvas.
-	 * The Wii-specific aspect-ratio adjustment is applied only to the final
-	 * presentation rectangle in update_screen().
+	 * Wii aspect correction changes only the final presentation rectangle.
 	 */
 	SDL_RenderSetLogicalSize(renderer_, 320, 200);
 #else
@@ -3336,10 +3351,9 @@ void draw_overlay(void) {
  * Wii-only aspect-ratio presentation.
  *
  * Leave SDL's renderer, logical size, framebuffer and VI configuration alone.
- * Wii 4:3 and Wii 16:9 with the option disabled use the original full-width
- * presentation path. On Wii 16:9 with the option enabled, narrow only the
- * final RenderCopy destination to 240 logical pixels (about 480 output pixels),
- * giving the 320x200 game image a 16:10 presentation on a 16:9 display.
+ * On a 16:9 Wii, aspect correction only narrows the final RenderCopy target:
+ * 288 logical pixels for a PC-like 16:10 appearance, or 240 for PC-like 4:3.
+ * On a 4:3 Wii the setting intentionally has no visual effect.
  */
 static const SDL_Rect* wii_get_aspect_ratio_rect(SDL_Rect* dest) {
 	static int wii_is_widescreen = -1;
@@ -3348,11 +3362,21 @@ static const SDL_Rect* wii_get_aspect_ratio_rect(SDL_Rect* dest) {
 		wii_is_widescreen = (CONF_GetAspectRatio() == CONF_ASPECT_16_9);
 	}
 
-	if (dest == NULL || !wii_is_widescreen || !use_correct_aspect_ratio) {
+	if (dest == NULL || !wii_is_widescreen ||
+			wii_aspect_correction == WII_ASPECT_CORRECTION_OFF) {
 		return NULL;
 	}
 
-	dest->w = 240;
+	switch (wii_aspect_correction) {
+		case WII_ASPECT_CORRECTION_16_10:
+			dest->w = 288;
+			break;
+		case WII_ASPECT_CORRECTION_4_3:
+			dest->w = 240;
+			break;
+		default:
+			return NULL;
+	}
 	dest->h = 200;
 	dest->x = (320 - dest->w) / 2;
 	dest->y = 0;

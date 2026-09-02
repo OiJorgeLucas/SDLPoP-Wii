@@ -43,27 +43,35 @@ static bool is_gamecube_name(const char* name) {
 	return name != NULL && SDL_strncasecmp(name, "Gamecube", 8) == 0;
 }
 
-bool wii_input_is_supported_controller_index(int index) {
-	if (!SDL_IsGameController(index)) return false;
+bool wii_input_is_gamecube_device_index(int index) {
+	const char* name = SDL_JoystickNameForIndex(index);
+	if (name == NULL) name = SDL_GameControllerNameForIndex(index);
+	return is_gamecube_name(name);
+}
 
-	const char* name = SDL_GameControllerNameForIndex(index);
-	if (name == NULL) name = SDL_JoystickNameForIndex(index);
-	return !is_gamecube_name(name);
+bool wii_input_is_gamecube_controller(SDL_GameController* controller) {
+	return controller != NULL && is_gamecube_name(SDL_GameControllerName(controller));
+}
+
+bool wii_input_is_supported_controller_index(int index) {
+	return SDL_IsGameController(index) != SDL_FALSE;
 }
 
 bool wii_input_is_supported_controller(SDL_GameController* controller) {
-	return controller != NULL && !is_gamecube_name(SDL_GameControllerName(controller));
+	return controller != NULL;
 }
 
 int wii_input_find_controller_index(void) {
 	for (int index = 0; index < SDL_NumJoysticks(); ++index) {
-		if (wii_input_is_supported_controller_index(index)) return index;
+		if (wii_input_is_supported_controller_index(index) &&
+				!wii_input_is_gamecube_device_index(index)) return index;
 	}
 	return -1;
 }
 
 wii_controller_kind wii_input_get_controller_kind(SDL_GameController* controller) {
 	if (!wii_input_is_supported_controller(controller)) return WII_CONTROLLER_NONE;
+	if (wii_input_is_gamecube_controller(controller)) return WII_CONTROLLER_GAMECUBE;
 
 	/*
 	 * The Wii SDL2 backend exposes a horizontal Wii Remote with these raw
@@ -90,6 +98,7 @@ wii_controller_kind wii_input_get_physical_controller_kind(SDL_Joystick* joystic
 	if (joystick == NULL) return WII_CONTROLLER_NONE;
 
 	const char* name = SDL_JoystickName(joystick);
+	if (is_gamecube_name(name)) return WII_CONTROLLER_GAMECUBE;
 	int channel = -1;
 	if (name == NULL || sscanf(name, "Wiimote %d", &channel) != 1 ||
 			channel < WPAD_CHAN_0 || channel > WPAD_CHAN_3) {
@@ -140,6 +149,17 @@ wii_gameplay_action wii_input_get_gameplay_action(wii_controller_kind kind, Uint
 				default: return WII_GAMEPLAY_ACTION_NONE;
 			}
 
+		case WII_CONTROLLER_GAMECUBE:
+			/* The OGC GameController mapping intentionally follows SDL's ABXY
+			 * convention, so physical GameCube B is SDL X and physical X is SDL B. */
+			switch (button) {
+				case SDL_CONTROLLER_BUTTON_A: return WII_GAMEPLAY_ACTION_JUMP;  /* physical A */
+				case SDL_CONTROLLER_BUTTON_X: return WII_GAMEPLAY_ACTION_SHIFT; /* physical B */
+				case SDL_CONTROLLER_BUTTON_B: return WII_GAMEPLAY_ACTION_SHIFT; /* physical X */
+				case SDL_CONTROLLER_BUTTON_Y: return WII_GAMEPLAY_ACTION_TIME;  /* physical Y */
+				default: return WII_GAMEPLAY_ACTION_NONE;
+			}
+
 		default:
 			return WII_GAMEPLAY_ACTION_NONE;
 	}
@@ -163,6 +183,11 @@ SDL_Scancode wii_input_get_menu_scancode(wii_controller_kind kind, Uint8 button)
 		case WII_CONTROLLER_CLASSIC:
 			if (button == SDL_CONTROLLER_BUTTON_B) return SDL_SCANCODE_RETURN;
 			if (button == SDL_CONTROLLER_BUTTON_A) return SDL_SCANCODE_ESCAPE;
+			break;
+
+		case WII_CONTROLLER_GAMECUBE:
+			if (button == SDL_CONTROLLER_BUTTON_A) return SDL_SCANCODE_RETURN; /* physical A */
+			if (button == SDL_CONTROLLER_BUTTON_X) return SDL_SCANCODE_ESCAPE; /* physical B */
 			break;
 
 		default:

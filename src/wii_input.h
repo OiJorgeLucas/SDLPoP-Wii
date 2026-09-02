@@ -9,6 +9,7 @@ typedef enum wii_controller_kind {
 	WII_CONTROLLER_REMOTE,
 	WII_CONTROLLER_NUNCHUK,
 	WII_CONTROLLER_CLASSIC,
+	WII_CONTROLLER_GAMECUBE,
 } wii_controller_kind;
 
 typedef enum wii_gameplay_action {
@@ -20,6 +21,8 @@ typedef enum wii_gameplay_action {
 } wii_gameplay_action;
 
 int wii_input_find_controller_index(void);
+bool wii_input_is_gamecube_device_index(int index);
+bool wii_input_is_gamecube_controller(SDL_GameController* controller);
 bool wii_input_is_supported_controller_index(int index);
 bool wii_input_is_supported_controller(SDL_GameController* controller);
 wii_controller_kind wii_input_get_controller_kind(SDL_GameController* controller);

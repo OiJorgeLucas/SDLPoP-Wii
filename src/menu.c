@@ -19,6 +19,9 @@ The authors of this program may be contacted at https://forum.princed.org
 */
 
 #include "common.h"
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#include "wii_input.h"
+#endif
 
 #ifdef USE_MENU
 
@@ -2262,6 +2265,11 @@ int key_test_paused_menu(int key) {
 			joy_y = 1;
 		int y_threshold = 14000;
 		int x_threshold = 26000; // Less sensitive, to prevent accidentally changing a setting.
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		if (wii_input_is_gamecube_controller(sdl_controller_)) {
+			x_threshold = y_threshold;
+		}
+#endif
 		if (joy_axis[SDL_CONTROLLER_AXIS_LEFTY] < -y_threshold) {
 			joy_y = -1;
 		} else if (joy_axis[SDL_CONTROLLER_AXIS_LEFTY] > y_threshold) {

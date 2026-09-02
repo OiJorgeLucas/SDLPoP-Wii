@@ -524,6 +524,9 @@ static bool wii_handle_replay_raw_button(const SDL_JoyButtonEvent* button_event,
 
 	return false;
 }
+static void wii_input_manager_init(void);
+static void wii_input_manager_shutdown(void);
+static void wii_input_manager_before_events(void);
 #endif
 
 static bool wii_handle_text_raw_button(const SDL_JoyButtonEvent* button_event) {
@@ -608,6 +611,7 @@ void quit(int exit_code) {
 // seg009:0C90
 void restore_stuff() {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_input_manager_shutdown();
 	free_wii_environment_cache();
 	wii_free_kid_resource_cache();
 	wii_free_resource_directory_cache();
@@ -1223,6 +1227,12 @@ void draw_image_transp(image_type* image,image_type* mask,int xpos,int ypos) {
 int set_joy_mode() {
 	// stub
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	/* Automatic joystick updates are disabled before SDL_Init on Wii. Give the
+	 * OGC detector several safe, 60 Hz-spaced scans before first enumeration. */
+	for (int scan = 0; scan < 4; ++scan) {
+		SDL_JoystickUpdate();
+		if (scan < 3) SDL_Delay(16);
+	}
 	if (gamecontrollerdb_file[0] != '\0') {
 		SDL_GameControllerAddMappingsFromFile(gamecontrollerdb_file);
 	}
@@ -1239,6 +1249,7 @@ int set_joy_mode() {
 			using_sdl_joystick_interface = 0;
 		}
 	}
+	wii_input_manager_init();
 #else
 	if (SDL_NumJoysticks() < 1) {
 		is_joyst_mode = 0;
@@ -3112,6 +3123,9 @@ void set_gr_mode(byte grmode) {
 #ifdef SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING
 	SDL_SetHint(SDL_HINT_WINDOWS_DISABLE_THREAD_NAMING, "1");
 #endif
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "0");
+#endif
 	if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_NOPARACHUTE | SDL_INIT_GAMECONTROLLER) != 0) {
 		sdlperror("set_gr_mode: SDL_Init");
 		quit(1);
@@ -4031,6 +4045,366 @@ void draw_colored_torch(int color, SDL_Surface* image, int xpos, int ypos) {
 	method_6_blit_img_to_scr(colored_image, xpos, ypos, blitters_0_no_transp);
 	SDL_FreeSurface(colored_image);
 }
+
+#define WII_GAMECUBE_MANUAL_INTERVAL_US 4000ULL
+#define WII_GAMECUBE_ABSENCE_UPDATES 16
+#define WII_GAMECUBE_CSTICK_PRESS 14000
+#define WII_GAMECUBE_CSTICK_RELEASE 8000
+
+/* These Wii gameplay helpers are defined later in this file. The GameCube
+ * input manager lives above them, so declare them before first use. */
+static void clear_wii_controller_state(void);
+static void activate_wii_controller(SDL_GameController* controller);
+
+typedef struct wii_input_manager_state {
+	bool initialized;
+	bool manual_update_mode;
+	bool gamecube_priority;
+	bool confirming_gamecube_absence;
+	bool confirmation_update_pending;
+	unsigned int confirmation_updates;
+	Uint64 perf_frequency;
+	Uint64 last_update_counter;
+	SDL_GameController* gamecube_controller;
+	SDL_JoystickID gamecube_instance_id;
+	SDL_GameController* family_controller;
+	SDL_JoystickID family_instance_id;
+	bool gamecube_z_held;
+	bool cstick_latched;
+	Sint16 cstick_x;
+	Sint16 cstick_y;
+} wii_input_manager_state;
+
+static wii_input_manager_state wii_input_manager;
+
+static SDL_JoystickID wii_controller_instance_id(SDL_GameController* controller) {
+	if (controller == NULL) return -1;
+	SDL_Joystick* joystick = SDL_GameControllerGetJoystick(controller);
+	return joystick != NULL ? SDL_JoystickInstanceID(joystick) : -1;
+}
+
+static int wii_input_manager_find_gamecube_index(void) {
+	for (int index = 0; index < SDL_NumJoysticks(); ++index) {
+		if (wii_input_is_gamecube_device_index(index)) return index;
+	}
+	return -1;
+}
+
+static bool wii_input_manager_set_auto_update(bool enabled) {
+	const char* value = enabled ? "1" : "0";
+	SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, value);
+	const char* current = SDL_GetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS);
+	if (current != NULL && strcmp(current, value) == 0) return true;
+	printf("Warning: could not set SDL_HINT_AUTO_UPDATE_JOYSTICKS=%s; keeping safe input fallback\n", value);
+	return false;
+}
+
+static void wii_input_manager_reset_gamecube_controls(void) {
+	wii_input_manager.gamecube_z_held = false;
+	wii_input_manager.cstick_latched = false;
+	wii_input_manager.cstick_x = 0;
+	wii_input_manager.cstick_y = 0;
+}
+
+static bool wii_input_manager_enter_manual_mode(void) {
+	if (wii_input_manager.manual_update_mode) return true;
+	if (!wii_input_manager_set_auto_update(false)) return false;
+	wii_input_manager.manual_update_mode = true;
+	wii_input_manager.last_update_counter = SDL_GetPerformanceCounter();
+	return true;
+}
+
+static void wii_input_manager_close_gamecube(void) {
+	if (wii_input_manager.gamecube_controller == NULL) return;
+	if (sdl_controller_ == wii_input_manager.gamecube_controller) sdl_controller_ = NULL;
+	SDL_GameControllerClose(wii_input_manager.gamecube_controller);
+	wii_input_manager.gamecube_controller = NULL;
+	wii_input_manager.gamecube_instance_id = -1;
+}
+
+static void wii_input_manager_activate_family(void) {
+	SDL_GameController* family = wii_input_manager.family_controller;
+	if (family != NULL && !SDL_GameControllerGetAttached(family)) {
+		SDL_GameControllerClose(family);
+		wii_input_manager.family_controller = NULL;
+		wii_input_manager.family_instance_id = -1;
+		family = NULL;
+	}
+	if (family == NULL) {
+		int index = wii_input_find_controller_index();
+		if (index >= 0) {
+			family = SDL_GameControllerOpen(index);
+			if (family != NULL) {
+				wii_input_manager.family_controller = family;
+				wii_input_manager.family_instance_id = wii_controller_instance_id(family);
+			}
+		}
+	}
+	activate_wii_controller(family);
+}
+
+static bool wii_input_manager_open_gamecube_index(int device_index) {
+	if (!wii_input_is_gamecube_device_index(device_index) || !SDL_IsGameController(device_index)) return false;
+	SDL_JoystickID device_instance = SDL_JoystickGetDeviceInstanceID(device_index);
+	if (wii_input_manager.gamecube_controller != NULL &&
+		wii_input_manager.gamecube_instance_id == device_instance) {
+		wii_input_manager.gamecube_priority = true;
+		activate_wii_controller(wii_input_manager.gamecube_controller);
+		return true;
+	}
+
+	wii_input_manager_close_gamecube();
+	SDL_GameController* controller = SDL_GameControllerOpen(device_index);
+	if (controller == NULL) {
+		printf("Warning: could not open GameCube controller: %s\n", SDL_GetError());
+		return false;
+	}
+	SDL_JoystickID instance_id = wii_controller_instance_id(controller);
+	if (instance_id < 0) {
+		SDL_GameControllerClose(controller);
+		printf("Warning: GameCube controller opened without a valid joystick instance\n");
+		return false;
+	}
+
+	wii_input_manager.gamecube_controller = controller;
+	wii_input_manager.gamecube_instance_id = instance_id;
+	wii_input_manager.gamecube_priority = true;
+	wii_input_manager.confirming_gamecube_absence = false;
+	wii_input_manager.confirmation_update_pending = false;
+	wii_input_manager.confirmation_updates = 0;
+	wii_input_manager_reset_gamecube_controls();
+	activate_wii_controller(controller);
+	return true;
+}
+
+static void wii_input_manager_open_family_index(int device_index) {
+	if (!wii_input_is_supported_controller_index(device_index) ||
+		wii_input_is_gamecube_device_index(device_index)) return;
+
+	SDL_JoystickID device_instance = SDL_JoystickGetDeviceInstanceID(device_index);
+	if (wii_input_manager.family_controller != NULL &&
+		wii_input_manager.family_instance_id == device_instance) return;
+
+	SDL_GameController* controller = SDL_GameControllerOpen(device_index);
+	if (controller == NULL) return;
+	SDL_GameController* old_family = wii_input_manager.family_controller;
+	wii_input_manager.family_controller = controller;
+	wii_input_manager.family_instance_id = wii_controller_instance_id(controller);
+	if (!wii_input_manager.gamecube_priority) activate_wii_controller(controller);
+	if (old_family != NULL && old_family != controller && old_family != wii_input_manager.gamecube_controller) {
+		SDL_GameControllerClose(old_family);
+	}
+}
+
+static void wii_input_manager_cancel_absence(int device_index) {
+	wii_input_manager.confirming_gamecube_absence = false;
+	wii_input_manager.confirmation_update_pending = false;
+	wii_input_manager.confirmation_updates = 0;
+	wii_input_manager_open_gamecube_index(device_index);
+}
+
+static void wii_input_manager_start_absence(SDL_JoystickID instance_id) {
+	if (instance_id != wii_input_manager.gamecube_instance_id ||
+		wii_input_manager.confirming_gamecube_absence) return;
+	wii_input_manager.confirming_gamecube_absence = true;
+	wii_input_manager.confirmation_update_pending = false;
+	wii_input_manager.confirmation_updates = 0;
+}
+
+static void wii_input_manager_confirm_absence(void) {
+	int gamecube_index = wii_input_manager_find_gamecube_index();
+	if (gamecube_index >= 0) {
+		wii_input_manager_cancel_absence(gamecube_index);
+		return;
+	}
+
+	wii_input_manager_close_gamecube();
+	wii_input_manager.gamecube_priority = false;
+	wii_input_manager.confirming_gamecube_absence = false;
+	wii_input_manager.confirmation_update_pending = false;
+	wii_input_manager.confirmation_updates = 0;
+	wii_input_manager_reset_gamecube_controls();
+	clear_wii_controller_state();
+
+	if (wii_input_manager_set_auto_update(true)) {
+		wii_input_manager.manual_update_mode = false;
+	} else {
+		/* Keep the 4 ms manual scheduler as a safe fallback if restoring SDL's
+		 * automatic joystick update mode ever fails. */
+		wii_input_manager.manual_update_mode = true;
+		wii_input_manager.last_update_counter = SDL_GetPerformanceCounter();
+	}
+	wii_input_manager_activate_family();
+}
+
+static void wii_input_manager_before_events(void) {
+	if (!wii_input_manager.initialized) return;
+
+	/* Count an absence-confirmation update only after the events generated by
+	 * that update have been drained. An ADDED from the same scan can therefore
+	 * cancel confirmation before the final count is accepted. */
+	if (wii_input_manager.confirming_gamecube_absence &&
+		wii_input_manager.confirmation_update_pending) {
+		wii_input_manager.confirmation_update_pending = false;
+		++wii_input_manager.confirmation_updates;
+		if (wii_input_manager.confirmation_updates >= WII_GAMECUBE_ABSENCE_UPDATES) {
+			wii_input_manager_confirm_absence();
+		}
+	}
+
+	if (!wii_input_manager.manual_update_mode) return;
+	Uint64 now = SDL_GetPerformanceCounter();
+	Uint64 min_delta = (wii_input_manager.perf_frequency * WII_GAMECUBE_MANUAL_INTERVAL_US) / 1000000ULL;
+	if (min_delta == 0) min_delta = 1;
+	if (now - wii_input_manager.last_update_counter < min_delta) return;
+
+	wii_input_manager.last_update_counter = now;
+	SDL_JoystickUpdate();
+	if (wii_input_manager.confirming_gamecube_absence) {
+		wii_input_manager.confirmation_update_pending = true;
+	}
+}
+
+static bool wii_input_manager_is_current_gamecube(SDL_GameController* controller) {
+	return controller != NULL && wii_input_manager.gamecube_priority &&
+		wii_input_manager.gamecube_controller == controller &&
+		wii_controller_instance_id(controller) == wii_input_manager.gamecube_instance_id;
+}
+
+static bool wii_input_manager_suppress_controller(SDL_GameController* controller) {
+	if (!wii_input_manager.gamecube_priority) return false;
+	return !wii_input_manager_is_current_gamecube(controller);
+}
+
+static bool wii_input_manager_consume_raw_instance(SDL_JoystickID instance_id) {
+	if (instance_id == wii_input_manager.gamecube_instance_id) return true;
+	SDL_Joystick* joystick = SDL_JoystickFromInstanceID(instance_id);
+	if (wii_input_get_physical_controller_kind(joystick) == WII_CONTROLLER_GAMECUBE) return true;
+	return wii_input_manager.gamecube_priority;
+}
+
+static void wii_input_manager_set_family_from_event(SDL_GameController* controller) {
+	if (controller == NULL || wii_input_is_gamecube_controller(controller)) return;
+	wii_input_manager.family_controller = controller;
+	wii_input_manager.family_instance_id = wii_controller_instance_id(controller);
+}
+
+static void wii_gamecube_cstick_shortcut(void) {
+	int x = wii_input_manager.cstick_x;
+	int y = wii_input_manager.cstick_y;
+	int abs_x = abs(x);
+	int abs_y = abs(y);
+	if (abs_x <= WII_GAMECUBE_CSTICK_RELEASE && abs_y <= WII_GAMECUBE_CSTICK_RELEASE) {
+		wii_input_manager.cstick_latched = false;
+		return;
+	}
+	if (wii_input_manager.cstick_latched || !wii_input_manager.gamecube_z_held) return;
+	if (MAX(abs_x, abs_y) < WII_GAMECUBE_CSTICK_PRESS) return;
+	wii_input_manager.cstick_latched = true;
+
+#ifdef USE_REPLAY
+	if (!enable_replay || wii_text_input_active) return;
+	if (abs_x >= abs_y) {
+		last_key_scancode = x < 0 ?
+			(SDL_SCANCODE_TAB | WITH_CTRL) : SDL_SCANCODE_TAB;
+	} else if (replaying) {
+		last_key_scancode = y < 0 ?
+			(SDL_SCANCODE_F | WITH_SHIFT) : SDL_SCANCODE_F;
+	}
+#endif
+}
+
+static void wii_gamecube_cstick_axis(SDL_GameControllerAxis axis, Sint16 value) {
+	if (axis == SDL_CONTROLLER_AXIS_RIGHTX) wii_input_manager.cstick_x = value;
+	else if (axis == SDL_CONTROLLER_AXIS_RIGHTY) wii_input_manager.cstick_y = value;
+	wii_gamecube_cstick_shortcut();
+}
+
+static void wii_gamecube_set_z(bool pressed) {
+	wii_input_manager.gamecube_z_held = pressed;
+	if (pressed &&
+		(abs(wii_input_manager.cstick_x) > WII_GAMECUBE_CSTICK_RELEASE ||
+		 abs(wii_input_manager.cstick_y) > WII_GAMECUBE_CSTICK_RELEASE)) {
+		/* Match Wii-family Minus semantics: Z arms the shortcuts, but an
+		 * already-deflected C-Stick must return to center before firing. */
+		wii_input_manager.cstick_latched = true;
+	}
+}
+
+static bool wii_input_manager_handle_added(int device_index) {
+	if (!wii_input_is_supported_controller_index(device_index)) return false;
+	if (wii_input_is_gamecube_device_index(device_index)) {
+		if (!wii_input_manager_enter_manual_mode()) return true;
+		if (wii_input_manager.confirming_gamecube_absence) {
+			wii_input_manager_cancel_absence(device_index);
+		} else {
+			wii_input_manager_open_gamecube_index(device_index);
+		}
+		return true;
+	}
+	wii_input_manager_open_family_index(device_index);
+	return true;
+}
+
+static bool wii_input_manager_handle_removed(SDL_JoystickID instance_id) {
+	if (instance_id == wii_input_manager.gamecube_instance_id) {
+		wii_input_manager_start_absence(instance_id);
+		return true;
+	}
+	if (instance_id != wii_input_manager.family_instance_id) return false;
+
+	SDL_GameController* removed_family = wii_input_manager.family_controller;
+	if (!wii_input_manager.gamecube_priority && sdl_controller_ == removed_family) {
+		activate_wii_controller(NULL);
+	}
+	wii_input_manager.family_controller = NULL;
+	wii_input_manager.family_instance_id = -1;
+	if (removed_family != NULL) SDL_GameControllerClose(removed_family);
+	if (!wii_input_manager.gamecube_priority) wii_input_manager_activate_family();
+	return true;
+}
+
+static bool wii_input_manager_handle_remapped(SDL_JoystickID instance_id) {
+	if (instance_id == wii_input_manager.gamecube_instance_id) return true;
+	if (instance_id != wii_input_manager.family_instance_id) return false;
+	if (!wii_input_manager.gamecube_priority) activate_wii_controller(wii_input_manager.family_controller);
+	return true;
+}
+
+static void wii_input_manager_init(void) {
+	if (wii_input_manager.initialized) return;
+	memset(&wii_input_manager, 0, sizeof(wii_input_manager));
+	wii_input_manager.gamecube_instance_id = -1;
+	wii_input_manager.family_instance_id = -1;
+	wii_input_manager.perf_frequency = SDL_GetPerformanceFrequency();
+	wii_input_manager.family_controller = sdl_controller_;
+	wii_input_manager.family_instance_id = wii_controller_instance_id(sdl_controller_);
+	wii_input_manager.initialized = true;
+
+	/* A Wii-only session stays on SDL's original automatic update path. If a
+	 * GameCube controller is already enumerated, protect it before opening it. */
+	int gamecube_index = wii_input_manager_find_gamecube_index();
+	if (gamecube_index >= 0 && wii_input_manager_enter_manual_mode()) {
+		wii_input_manager_open_gamecube_index(gamecube_index);
+	} else if (gamecube_index < 0 && !wii_input_manager_set_auto_update(true)) {
+		/* The startup hint intentionally disabled automatic updates before
+		 * SDL_Init. If restoring the original Wii-only path fails, keep input
+		 * alive through the already validated protected scheduler. */
+		wii_input_manager.manual_update_mode = true;
+		wii_input_manager.last_update_counter = SDL_GetPerformanceCounter();
+	}
+}
+
+static void wii_input_manager_shutdown(void) {
+	if (!wii_input_manager.initialized) return;
+	wii_input_manager_close_gamecube();
+	if (wii_input_manager.manual_update_mode) {
+		SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "1");
+	}
+	wii_input_manager.gamecube_priority = false;
+	wii_input_manager.manual_update_mode = false;
+	wii_input_manager.initialized = false;
+}
 #endif
 
 image_type* method_6_blit_img_to_scr(image_type* image,int xpos,int ypos,int blit) {
@@ -4246,6 +4620,9 @@ void process_events() {
 	// Much like the x86 HLT instruction.
 	// (We still want to process all events in the queue. For instance, there might be
 	// simultaneous SDL2 KEYDOWN and TEXTINPUT events.)
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	wii_input_manager_before_events();
+#endif
 	SDL_Event event;
 	while (SDL_PollEvent(&event) == 1) { // while there are still events to be processed
 		switch (event.type) {
@@ -4379,6 +4756,22 @@ void process_events() {
 			{
 				SDL_GameController* event_controller = SDL_GameControllerFromInstanceID(event.caxis.which);
 				if (!wii_input_is_supported_controller(event_controller)) break;
+				wii_controller_kind controller_kind = wii_input_get_controller_kind(event_controller);
+				if (wii_input_manager_suppress_controller(event_controller)) break;
+				if (controller_kind == WII_CONTROLLER_GAMECUBE) {
+					if (!wii_input_manager_is_current_gamecube(event_controller)) break;
+					if (event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX ||
+						event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY) {
+						wii_gamecube_cstick_axis((SDL_GameControllerAxis)event.caxis.axis, event.caxis.value);
+						break;
+					}
+					if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT ||
+						event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
+						/* GameCube L/R analog travel is intentionally unused.
+						 * Digital trigger clicks arrive separately as shoulder buttons. */
+						break;
+					}
+				}
 #endif
 				if (event.caxis.axis < 6) {
 					joy_axis[event.caxis.axis] = event.caxis.value;
@@ -4404,27 +4797,7 @@ void process_events() {
 			case SDL_CONTROLLERDEVICEADDED:
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 			{
-				if (!wii_input_is_supported_controller_index(event.cdevice.which)) break;
-
-				SDL_GameController* added_controller = NULL;
-				SDL_JoystickID added_instance = SDL_JoystickGetDeviceInstanceID(event.cdevice.which);
-				if (sdl_controller_ != NULL) {
-					SDL_Joystick* active_joystick = SDL_GameControllerGetJoystick(sdl_controller_);
-					if (active_joystick != NULL && SDL_JoystickInstanceID(active_joystick) == added_instance) {
-						added_controller = sdl_controller_;
-					}
-				}
-
-				if (added_controller == NULL) {
-					added_controller = SDL_GameControllerOpen(event.cdevice.which);
-					if (added_controller != NULL) {
-						if (sdl_controller_ != NULL && sdl_controller_ != added_controller) {
-							SDL_GameControllerClose(sdl_controller_);
-						}
-						activate_wii_controller(added_controller);
-					}
-				}
-
+				wii_input_manager_handle_added(event.cdevice.which);
 				break;
 			}
 #else
@@ -4439,20 +4812,9 @@ void process_events() {
 			case SDL_CONTROLLERDEVICEREMOVED:
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 			{
+				if (wii_input_manager_handle_removed(event.cdevice.which)) break;
 				SDL_GameController* removed_controller = SDL_GameControllerFromInstanceID(event.cdevice.which);
-				SDL_GameController* controller_to_close = removed_controller;
-				bool removed_active_controller = false;
-
-				if (sdl_controller_ != NULL) {
-					SDL_Joystick* active_joystick = SDL_GameControllerGetJoystick(sdl_controller_);
-					if (active_joystick != NULL && SDL_JoystickInstanceID(active_joystick) == event.cdevice.which) {
-						removed_active_controller = true;
-						controller_to_close = sdl_controller_;
-					}
-				}
-
-				if (removed_active_controller) activate_wii_controller(NULL);
-				if (controller_to_close != NULL) SDL_GameControllerClose(controller_to_close);
+				if (removed_controller != NULL) SDL_GameControllerClose(removed_controller);
 				break;
 			}
 #else
@@ -4467,8 +4829,12 @@ void process_events() {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 			case SDL_CONTROLLERDEVICEREMAPPED:
 			{
+				if (wii_input_manager_handle_remapped(event.cdevice.which)) break;
 				SDL_GameController* remapped_controller = SDL_GameControllerFromInstanceID(event.cdevice.which);
-				if (wii_input_is_supported_controller(remapped_controller)) {
+				if (wii_input_is_supported_controller(remapped_controller) &&
+					!wii_input_is_gamecube_controller(remapped_controller) &&
+					!wii_input_manager.gamecube_priority) {
+					wii_input_manager_set_family_from_event(remapped_controller);
 					activate_wii_controller(remapped_controller);
 				}
 				break;
@@ -4480,10 +4846,28 @@ void process_events() {
 				SDL_GameController* event_controller = SDL_GameControllerFromInstanceID(event.cbutton.which);
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 				if (!wii_input_is_supported_controller(event_controller)) break;
+				wii_controller_kind controller_kind = wii_input_get_controller_kind(event_controller);
+				if (controller_kind == WII_CONTROLLER_GAMECUBE) {
+					if (!wii_input_manager_is_current_gamecube(event_controller)) break;
+					sdl_controller_ = event_controller;
+				} else {
+					/* Keep Wii HOME available while GameCube owns gameplay. Every
+					 * other Wii-family input is suppressed until GameCube leaves. */
+					if (wii_input_manager.gamecube_priority) {
+						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+#ifdef USE_MENU
+							wii_request_quit_confirmation();
+#endif
+						}
+						break;
+					}
+					wii_input_manager_set_family_from_event(event_controller);
+					sdl_controller_ = event_controller;
+				}
 #else
 				if (event_controller == NULL) event_controller = sdl_controller_;
-#endif
 				sdl_controller_ = event_controller;
+#endif
 #ifdef USE_AUTO_INPUT_MODE
 				if (!is_joyst_mode) {
 					is_joyst_mode = 1;
@@ -4491,16 +4875,37 @@ void process_events() {
 				}
 #endif
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-				wii_controller_kind controller_kind = wii_input_get_controller_kind(event_controller);
-
-				/* Home opens the existing quit confirmation during an active game.
-				 * It is consumed even when confirmation is unavailable, so it never
-				 * behaves like the pause/menu button. */
-				if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+				if (controller_kind == WII_CONTROLLER_GAMECUBE) {
+					/* The OGC backend exposes physical GameCube Z as SDL BACK. */
+					if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+						wii_gamecube_set_z(true);
+						break;
+					}
+					if (wii_input_manager.gamecube_z_held &&
+						event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
 #ifdef USE_MENU
-					wii_request_quit_confirmation();
+						wii_request_quit_confirmation();
 #endif
-					break;
+						break;
+					}
+					if (wii_input_manager.gamecube_z_held &&
+						wii_input_get_gameplay_action(controller_kind, event.cbutton.button) ==
+							WII_GAMEPLAY_ACTION_TIME) {
+#ifdef USE_SCREENSHOT
+						save_screenshot();
+#endif
+						break;
+					}
+				} else {
+					/* Home opens the existing quit confirmation during an active game.
+					 * It is consumed even when confirmation is unavailable, so it never
+					 * behaves like the pause/menu button. */
+					if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+#ifdef USE_MENU
+						wii_request_quit_confirmation();
+#endif
+						break;
+					}
 				}
 
 				if (wii_text_input_active) {
@@ -4514,7 +4919,22 @@ void process_events() {
 						break;
 					}
 
-					if (wii_input_is_face_button(event.cbutton.button)) {
+					if (controller_kind == WII_CONTROLLER_GAMECUBE) {
+						/* OGC maps physical GameCube B to SDL X. */
+						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_A) {
+							wii_text_pending_action = WII_TEXT_INPUT_CONFIRM;
+							break;
+						}
+						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_X) {
+							wii_text_pending_action = WII_TEXT_INPUT_DELETE;
+							break;
+						}
+						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_Y) {
+							wii_text_pending_action = WII_TEXT_INPUT_CANCEL;
+							break;
+						}
+						if (wii_input_is_face_button(event.cbutton.button)) break;
+					} else if (wii_input_is_face_button(event.cbutton.button)) {
 						/* Text face buttons are handled from the raw joystick event below.
 						 * This keeps them tied to the current physical Wii expansion even
 						 * if SDL's GameController mapping is temporarily stale. */
@@ -4572,7 +4992,7 @@ void process_events() {
 					case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
 					case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
 						joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW;
-						break; // Classic L/R: crouch/down
+						break; // Classic/GameCube L/R: crouch/down
 #else
 					case SDL_CONTROLLER_BUTTON_A:          joy_button_states[JOYINPUT_A] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** A (down) ***/
 					case SDL_CONTROLLER_BUTTON_Y:          joy_button_states[JOYINPUT_Y] |= KEYSTATE_HELD | KEYSTATE_HELD_NEW; break; /*** Y (up) ***/
@@ -4603,6 +5023,16 @@ void process_events() {
 				SDL_GameController* event_controller = SDL_GameControllerFromInstanceID(event.cbutton.which);
 				if (!wii_input_is_supported_controller(event_controller)) break;
 				wii_controller_kind controller_kind = wii_input_get_controller_kind(event_controller);
+				if (controller_kind == WII_CONTROLLER_GAMECUBE) {
+					if (!wii_input_manager_is_current_gamecube(event_controller)) break;
+					if (event.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+						wii_gamecube_set_z(false);
+						break;
+					}
+				} else {
+					if (wii_input_manager.gamecube_priority) break;
+					wii_input_manager_set_family_from_event(event_controller);
+				}
 #endif
 				switch (event.cbutton.button)
 				{
@@ -4644,6 +5074,11 @@ void process_events() {
 			case SDL_JOYBUTTONUP:
 			case SDL_JOYAXISMOTION:
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+			{
+				SDL_JoystickID raw_instance = event.type == SDL_JOYAXISMOTION ?
+					event.jaxis.which : event.jbutton.which;
+				if (wii_input_manager_consume_raw_instance(raw_instance)) break;
+			}
 				if (event.type == SDL_JOYBUTTONDOWN && wii_handle_text_raw_button(&event.jbutton)) {
 					break;
 				}

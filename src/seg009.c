@@ -483,51 +483,12 @@ static bool wii_text_input_active = false;
 static bool wii_text_input_controller_mode = false;
 static wii_text_input_action wii_text_pending_action = WII_TEXT_INPUT_NONE;
 
-#ifdef USE_REPLAY
-static bool wii_replay_modifier_held = false;
+static bool wii_minus_held = false;
 
-static bool wii_handle_replay_raw_button(const SDL_JoyButtonEvent* button_event, bool pressed, int* replay_key) {
-	if (replay_key != NULL) *replay_key = 0;
-	if (button_event == NULL) return false;
-
-	if (!enable_replay || wii_text_input_active) {
-		wii_replay_modifier_held = false;
-		return false;
-	}
-
-	SDL_Joystick* joystick = SDL_JoystickFromInstanceID(button_event->which);
-	if (joystick == NULL && sdl_controller_ != NULL) {
-		joystick = SDL_GameControllerGetJoystick(sdl_controller_);
-	}
-
-	wii_controller_kind kind = wii_input_get_physical_controller_kind(joystick);
-
-	/* Minus is the common physical modifier on Wii Remote, Nunchuk and
-	 * Classic Controller in the OGC SDL backend (raw button 4). */
-	if (button_event->button == 4) {
-		wii_replay_modifier_held = pressed;
-		return true;
-	}
-
-	/* On Nunchuk, 1 and 2 are otherwise unused by the Wii gameplay mapping.
-	 * They are only replay shortcuts when Minus was already held. */
-	if (!pressed || !wii_replay_modifier_held || kind != WII_CONTROLLER_NUNCHUK) return false;
-
-	if (button_event->button == 2) { // 1
-		if (replay_key != NULL) *replay_key = SDL_SCANCODE_TAB;
-		return true;
-	}
-	if (button_event->button == 3) { // 2
-		if (replay_key != NULL) *replay_key = SDL_SCANCODE_TAB | WITH_CTRL;
-		return true;
-	}
-
-	return false;
-}
+static bool wii_handle_family_raw_button(const SDL_JoyButtonEvent* button_event, bool pressed);
 static void wii_input_manager_init(void);
 static void wii_input_manager_shutdown(void);
 static void wii_input_manager_before_events(void);
-#endif
 
 static bool wii_handle_text_raw_button(const SDL_JoyButtonEvent* button_event) {
 	if (!wii_text_input_active || button_event == NULL) return false;
@@ -4557,6 +4518,157 @@ void toggle_fullscreen(void) {
 }
 
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#define WII_CLASSIC_RIGHT_STICK_PRESS 14000
+#define WII_CLASSIC_RIGHT_STICK_RELEASE 8000
+
+typedef enum wii_replay_direction {
+	WII_REPLAY_DIRECTION_NONE = 0,
+	WII_REPLAY_DIRECTION_LEFT,
+	WII_REPLAY_DIRECTION_RIGHT,
+	WII_REPLAY_DIRECTION_UP,
+	WII_REPLAY_DIRECTION_DOWN,
+} wii_replay_direction;
+
+static Sint16 wii_classic_right_x = 0;
+static Sint16 wii_classic_right_y = 0;
+static bool wii_classic_right_latched = false;
+
+static bool wii_family_shortcut_context_available(void) {
+	if (wii_text_input_active) return false;
+#ifdef USE_MENU
+	if (is_menu_shown) return false;
+#endif
+	return true;
+}
+
+static wii_replay_direction wii_replay_direction_from_dpad(Uint8 button) {
+	switch (button) {
+		case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return WII_REPLAY_DIRECTION_LEFT;
+		case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return WII_REPLAY_DIRECTION_RIGHT;
+		case SDL_CONTROLLER_BUTTON_DPAD_UP: return WII_REPLAY_DIRECTION_UP;
+		case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return WII_REPLAY_DIRECTION_DOWN;
+		default: return WII_REPLAY_DIRECTION_NONE;
+	}
+}
+
+static bool wii_trigger_replay_direction(wii_replay_direction direction) {
+#ifdef USE_REPLAY
+	if (!enable_replay || !wii_family_shortcut_context_available()) return false;
+
+	switch (direction) {
+		case WII_REPLAY_DIRECTION_LEFT:
+			last_key_scancode = SDL_SCANCODE_TAB | WITH_CTRL;
+			break;
+		case WII_REPLAY_DIRECTION_RIGHT:
+			last_key_scancode = SDL_SCANCODE_TAB;
+			break;
+		case WII_REPLAY_DIRECTION_UP:
+			if (replaying) last_key_scancode = SDL_SCANCODE_F | WITH_SHIFT;
+			break;
+		case WII_REPLAY_DIRECTION_DOWN:
+			if (replaying) last_key_scancode = SDL_SCANCODE_F;
+			break;
+		default:
+			return false;
+	}
+	return true;
+#else
+	(void)direction;
+	return false;
+#endif
+}
+
+static void wii_classic_reset_right_stick(void) {
+	wii_classic_right_x = 0;
+	wii_classic_right_y = 0;
+	wii_classic_right_latched = false;
+}
+
+static void wii_classic_right_stick_shortcut(void) {
+	int x = wii_classic_right_x;
+	int y = wii_classic_right_y;
+	int abs_x = abs(x);
+	int abs_y = abs(y);
+
+	if (abs_x <= WII_CLASSIC_RIGHT_STICK_RELEASE &&
+		abs_y <= WII_CLASSIC_RIGHT_STICK_RELEASE) {
+		wii_classic_right_latched = false;
+		return;
+	}
+	if (wii_classic_right_latched || !wii_minus_held) return;
+	if (MAX(abs_x, abs_y) < WII_CLASSIC_RIGHT_STICK_PRESS) return;
+
+	wii_classic_right_latched = true;
+	if (abs_x >= abs_y) {
+		wii_trigger_replay_direction(x < 0 ?
+			WII_REPLAY_DIRECTION_LEFT : WII_REPLAY_DIRECTION_RIGHT);
+	} else {
+		wii_trigger_replay_direction(y < 0 ?
+			WII_REPLAY_DIRECTION_UP : WII_REPLAY_DIRECTION_DOWN);
+	}
+}
+
+static void wii_classic_right_stick_axis(SDL_GameControllerAxis axis, Sint16 value) {
+	if (axis == SDL_CONTROLLER_AXIS_RIGHTX) wii_classic_right_x = value;
+	else if (axis == SDL_CONTROLLER_AXIS_RIGHTY) wii_classic_right_y = value;
+	wii_classic_right_stick_shortcut();
+}
+
+static void wii_classic_set_minus(bool pressed) {
+	wii_minus_held = pressed;
+	if (pressed &&
+		(abs(wii_classic_right_x) > WII_CLASSIC_RIGHT_STICK_RELEASE ||
+		 abs(wii_classic_right_y) > WII_CLASSIC_RIGHT_STICK_RELEASE)) {
+		/* Minus arms Classic shortcuts, but an already-deflected stick must
+		 * return to center before a shortcut can fire. */
+		wii_classic_right_latched = true;
+	}
+}
+
+static bool wii_handle_family_raw_button(const SDL_JoyButtonEvent* button_event, bool pressed) {
+	if (button_event == NULL) return false;
+
+	SDL_Joystick* joystick = SDL_JoystickFromInstanceID(button_event->which);
+	if (joystick == NULL && sdl_controller_ != NULL) {
+		joystick = SDL_GameControllerGetJoystick(sdl_controller_);
+	}
+	wii_controller_kind kind = wii_input_get_physical_controller_kind(joystick);
+
+	/* Minus is raw button 4 in the Wii SDL backend. It is a shortcut modifier
+	 * only for a bare Wii Remote and Classic Controller. */
+	if (button_event->button == 4) {
+		if (kind == WII_CONTROLLER_CLASSIC) {
+			wii_classic_set_minus(pressed);
+		} else if (kind == WII_CONTROLLER_REMOTE) {
+			wii_minus_held = pressed;
+		} else if (kind == WII_CONTROLLER_NUNCHUK) {
+			wii_minus_held = false;
+		}
+		return kind == WII_CONTROLLER_REMOTE ||
+			kind == WII_CONTROLLER_NUNCHUK ||
+			kind == WII_CONTROLLER_CLASSIC;
+	}
+
+	if (kind != WII_CONTROLLER_NUNCHUK) return false;
+
+	if (button_event->button == 2) { // physical 1
+#ifdef USE_SCREENSHOT
+		if (pressed) save_screenshot();
+#endif
+		return true;
+	}
+
+	return false;
+}
+
+static bool wii_should_map_confirm_to_return(void) {
+	if (wii_text_input_active) return false;
+#ifdef USE_MENU
+	if (is_menu_shown) return false;
+#endif
+	return start_level < 0 || (rem_min != 0 && Kid.alive > 6);
+}
+
 static void set_wii_gameplay_action(wii_gameplay_action action, bool pressed) {
 	int state_bits = KEYSTATE_HELD | KEYSTATE_HELD_NEW;
 
@@ -4600,14 +4712,13 @@ static void clear_wii_controller_state(void) {
 }
 
 static void activate_wii_controller(SDL_GameController* controller) {
+	wii_minus_held = false;
+	wii_classic_reset_right_stick();
 	sdl_controller_ = controller;
 	is_joyst_mode = (controller != NULL);
 	is_keyboard_mode = !is_joyst_mode;
 	using_sdl_joystick_interface = 0;
 	clear_wii_controller_state();
-#ifdef USE_REPLAY
-	wii_replay_modifier_held = false;
-#endif
 }
 
 #endif
@@ -4771,6 +4882,13 @@ void process_events() {
 						 * Digital trigger clicks arrive separately as shoulder buttons. */
 						break;
 					}
+				} else if (controller_kind == WII_CONTROLLER_CLASSIC &&
+					(event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX ||
+					 event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY)) {
+					/* The Classic right stick is reserved for Minus+replay shortcuts.
+					 * Never pass it through to gameplay movement. */
+					wii_classic_right_stick_axis((SDL_GameControllerAxis)event.caxis.axis, event.caxis.value);
+					break;
 				}
 #endif
 				if (event.caxis.axis < 6) {
@@ -4906,12 +5024,24 @@ void process_events() {
 #endif
 						break;
 					}
+
+					SDL_Joystick* family_joystick = SDL_GameControllerGetJoystick(event_controller);
+					wii_controller_kind physical_kind =
+						wii_input_get_physical_controller_kind(family_joystick);
+					if (wii_minus_held &&
+						(physical_kind == WII_CONTROLLER_REMOTE ||
+						 physical_kind == WII_CONTROLLER_CLASSIC) &&
+						wii_input_get_gameplay_action(controller_kind, event.cbutton.button) ==
+							WII_GAMEPLAY_ACTION_TIME) {
+#ifdef USE_SCREENSHOT
+						save_screenshot();
+#endif
+						break;
+					}
 				}
 
 				if (wii_text_input_active) {
-#ifdef USE_REPLAY
-					wii_replay_modifier_held = false;
-#endif
+					wii_minus_held = false;
 					wii_text_input_controller_mode = true;
 
 					if (event.cbutton.button == SDL_CONTROLLER_BUTTON_START) {
@@ -4942,24 +5072,32 @@ void process_events() {
 					}
 				}
 
-#ifdef USE_REPLAY
-				/* Minus must be pressed first. On Wii Remote and Classic Controller,
-				 * Left/Right are consumed as replay shortcuts instead of gameplay. */
-				if (enable_replay && wii_replay_modifier_held && !wii_text_input_active) {
+				if (wii_should_map_confirm_to_return() &&
+					wii_input_get_menu_scancode(controller_kind, event.cbutton.button) ==
+						SDL_SCANCODE_RETURN) {
+					last_key_scancode = SDL_SCANCODE_RETURN;
+					break;
+				}
+
+				wii_replay_direction replay_direction =
+					wii_replay_direction_from_dpad(event.cbutton.button);
+				if (replay_direction != WII_REPLAY_DIRECTION_NONE &&
+					wii_family_shortcut_context_available()) {
 					SDL_Joystick* replay_joystick = SDL_GameControllerGetJoystick(event_controller);
-					wii_controller_kind physical_kind = wii_input_get_physical_controller_kind(replay_joystick);
-					if (physical_kind == WII_CONTROLLER_REMOTE || physical_kind == WII_CONTROLLER_CLASSIC) {
-						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) {
-							last_key_scancode = SDL_SCANCODE_TAB;
-							break;
-						}
-						if (event.cbutton.button == SDL_CONTROLLER_BUTTON_DPAD_LEFT) {
-							last_key_scancode = SDL_SCANCODE_TAB | WITH_CTRL;
-							break;
-						}
+					wii_controller_kind physical_kind =
+						wii_input_get_physical_controller_kind(replay_joystick);
+
+					if (physical_kind == WII_CONTROLLER_NUNCHUK) {
+						/* Nunchuk gameplay uses only its analog stick for movement. The
+						 * Wii Remote D-pad is reserved for replay shortcuts. */
+						wii_trigger_replay_direction(replay_direction);
+						break;
+					}
+					if (physical_kind == WII_CONTROLLER_REMOTE && wii_minus_held &&
+						wii_trigger_replay_direction(replay_direction)) {
+						break;
 					}
 				}
-#endif
 
 #ifdef USE_MENU
 				/* Keep the original D-pad and analog menu processing. Only face
@@ -5082,19 +5220,14 @@ void process_events() {
 				if (event.type == SDL_JOYBUTTONDOWN && wii_handle_text_raw_button(&event.jbutton)) {
 					break;
 				}
-#ifdef USE_REPLAY
 				if (event.type == SDL_JOYBUTTONDOWN || event.type == SDL_JOYBUTTONUP) {
-					int replay_key = 0;
-					if (wii_handle_replay_raw_button(
+					if (wii_handle_family_raw_button(
 						&event.jbutton,
-						event.type == SDL_JOYBUTTONDOWN,
-						&replay_key
+						event.type == SDL_JOYBUTTONDOWN
 					)) {
-						if (replay_key != 0) last_key_scancode = replay_key;
 						break;
 					}
 				}
-#endif
 #endif
 				// Only handle the event if the joystick is incompatible with the SDL_GameController interface.
 				// (Otherwise it will interfere with the normal action of the SDL_GameController API.)

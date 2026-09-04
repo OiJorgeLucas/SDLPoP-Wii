@@ -2594,6 +2594,8 @@ static Uint8* wii_fast_forward_audio_buffer = NULL;
 static size_t wii_fast_forward_audio_buffer_size = 0;
 static bool wii_keyboard_fast_forward_held = false;
 static bool wii_nunchuk_fast_forward_held = false;
+static bool wii_classic_fast_forward_held = false;
+static bool wii_classic_zr_consumed = false;
 
 static size_t wii_fast_forward_callback_size(void) {
 	if (digi_audiospec == NULL) return 0;
@@ -2640,7 +2642,8 @@ static void wii_free_fast_forward_audio_buffer(void) {
 }
 
 static void wii_update_fast_forward(void) {
-	bool pressed = wii_keyboard_fast_forward_held || wii_nunchuk_fast_forward_held;
+	bool pressed = wii_keyboard_fast_forward_held ||
+		wii_nunchuk_fast_forward_held || wii_classic_fast_forward_held;
 
 	if (pressed) {
 		if (audio_speed == WII_FAST_FORWARD_RATIO) return;
@@ -2663,6 +2666,12 @@ static void wii_set_keyboard_fast_forward(bool pressed) {
 static void wii_set_nunchuk_fast_forward(bool pressed) {
 	if (wii_nunchuk_fast_forward_held == pressed) return;
 	wii_nunchuk_fast_forward_held = pressed;
+	wii_update_fast_forward();
+}
+
+static void wii_set_classic_fast_forward(bool pressed) {
+	if (wii_classic_fast_forward_held == pressed) return;
+	wii_classic_fast_forward_held = pressed;
 	wii_update_fast_forward();
 }
 #endif
@@ -4724,6 +4733,9 @@ static void wii_classic_right_stick_axis(SDL_GameControllerAxis axis, Sint16 val
 }
 
 static void wii_classic_set_minus(bool pressed) {
+#ifdef USE_FAST_FORWARD
+	if (!pressed) wii_set_classic_fast_forward(false);
+#endif
 	wii_minus_held = pressed;
 	if (pressed &&
 		(abs(wii_classic_right_x) > WII_CLASSIC_RIGHT_STICK_RELEASE ||
@@ -4756,6 +4768,31 @@ static bool wii_handle_family_raw_button(const SDL_JoyButtonEvent* button_event,
 		return kind == WII_CONTROLLER_REMOTE ||
 			kind == WII_CONTROLLER_NUNCHUK ||
 			kind == WII_CONTROLLER_CLASSIC;
+	}
+
+	/* In the combined Wiimote+Classic OGC device, raw button 14 is physical ZR.
+	 * Minus must already be held, matching the Classic replay shortcut rules.
+	 * When claimed by fast-forward, suppress its GameController trigger axis
+	 * for the entire ZR press so crouch cannot leak through. */
+	if (kind == WII_CONTROLLER_CLASSIC && button_event->button == 14) {
+#ifdef USE_FAST_FORWARD
+		if (pressed) {
+			if (!wii_minus_held) return false;
+			wii_classic_zr_consumed = true;
+			joy_axis[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0;
+			joy_axis_max[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0;
+			wii_set_classic_fast_forward(true);
+			return true;
+		}
+		if (wii_classic_zr_consumed) {
+			wii_classic_zr_consumed = false;
+			wii_set_classic_fast_forward(false);
+			joy_axis[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0;
+			joy_axis_max[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0;
+			return true;
+		}
+#endif
+		return false;
 	}
 
 	if (kind != WII_CONTROLLER_NUNCHUK) return false;
@@ -4831,6 +4868,8 @@ static void clear_wii_controller_state(void) {
 static void activate_wii_controller(SDL_GameController* controller) {
 #ifdef USE_FAST_FORWARD
 	wii_set_nunchuk_fast_forward(false);
+	wii_set_classic_fast_forward(false);
+	wii_classic_zr_consumed = false;
 #endif
 	wii_minus_held = false;
 	wii_classic_reset_right_stick();
@@ -5010,13 +5049,24 @@ void process_events() {
 						 * Digital trigger clicks arrive separately as shoulder buttons. */
 						break;
 					}
-				} else if (controller_kind == WII_CONTROLLER_CLASSIC &&
-					(event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX ||
-					 event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY)) {
-					/* The Classic right stick is reserved for Minus+replay shortcuts.
-					 * Never pass it through to gameplay movement. */
-					wii_classic_right_stick_axis((SDL_GameControllerAxis)event.caxis.axis, event.caxis.value);
-					break;
+				} else if (controller_kind == WII_CONTROLLER_CLASSIC) {
+#ifdef USE_FAST_FORWARD
+					if (event.caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERRIGHT &&
+						wii_classic_zr_consumed) {
+						/* ZR was claimed by Minus+ZR fast-forward. Keep both the
+						 * current and quick-input peak state neutral until ZR is released. */
+						joy_axis[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0;
+						joy_axis_max[SDL_CONTROLLER_AXIS_TRIGGERRIGHT] = 0;
+						break;
+					}
+#endif
+					if (event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX ||
+						event.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY) {
+						/* The Classic right stick is reserved for Minus+replay shortcuts.
+						 * Never pass it through to gameplay movement. */
+						wii_classic_right_stick_axis((SDL_GameControllerAxis)event.caxis.axis, event.caxis.value);
+						break;
+					}
 				}
 #endif
 				if (event.caxis.axis < 6) {
@@ -5169,6 +5219,9 @@ void process_events() {
 				}
 
 				if (wii_text_input_active) {
+#ifdef USE_FAST_FORWARD
+					wii_set_classic_fast_forward(false);
+#endif
 					wii_minus_held = false;
 					wii_text_input_controller_mode = true;
 

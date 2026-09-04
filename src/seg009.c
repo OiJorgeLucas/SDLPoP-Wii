@@ -486,6 +486,9 @@ static wii_text_input_action wii_text_pending_action = WII_TEXT_INPUT_NONE;
 static bool wii_minus_held = false;
 
 static bool wii_handle_family_raw_button(const SDL_JoyButtonEvent* button_event, bool pressed);
+#ifdef USE_FAST_FORWARD
+static void wii_free_fast_forward_audio_buffer(void);
+#endif
 static void wii_input_manager_init(void);
 static void wii_input_manager_shutdown(void);
 static void wii_input_manager_before_events(void);
@@ -578,6 +581,9 @@ void restore_stuff() {
 	wii_free_resource_directory_cache();
 #endif
 	SDL_Quit();
+#if (defined(__WII__) || defined(HW_RVL) || defined(GEKKO)) && defined(USE_FAST_FORWARD)
+	wii_free_fast_forward_audio_buffer();
+#endif
 }
 
 // seg009:0E33
@@ -2580,6 +2586,86 @@ void ogg_callback(void *userdata, Uint8 *stream, int len) {
 
 #ifdef USE_FAST_FORWARD
 int audio_speed = 1; // =1 normally, >1 during fast forwarding
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+#define WII_FAST_FORWARD_RATIO 4
+
+static Uint8* wii_fast_forward_audio_buffer = NULL;
+static size_t wii_fast_forward_audio_buffer_size = 0;
+static bool wii_keyboard_fast_forward_held = false;
+static bool wii_nunchuk_fast_forward_held = false;
+
+static size_t wii_fast_forward_callback_size(void) {
+	if (digi_audiospec == NULL) return 0;
+
+	if (digi_audiospec->size != 0) return digi_audiospec->size;
+
+	int bits_per_sample = SDL_AUDIO_BITSIZE(digi_audiospec->format);
+	if (bits_per_sample <= 0 || (bits_per_sample % 8) != 0) return 0;
+
+	return (size_t)digi_audiospec->samples *
+		(size_t)digi_audiospec->channels * (size_t)(bits_per_sample / 8);
+}
+
+static bool wii_prepare_fast_forward_audio_buffer(void) {
+	/* Keep normal startup/loading unchanged: allocate only when fast-forward is
+	 * actually requested (or while it is already held when audio is opened). */
+	if (digi_audiospec == NULL) return true;
+
+	size_t callback_size = wii_fast_forward_callback_size();
+	if (callback_size == 0 ||
+		callback_size > ((size_t)-1) / WII_FAST_FORWARD_RATIO) {
+		return false;
+	}
+
+	size_t required_size = callback_size * WII_FAST_FORWARD_RATIO;
+	if (wii_fast_forward_audio_buffer != NULL &&
+		wii_fast_forward_audio_buffer_size >= required_size) {
+		return true;
+	}
+
+	Uint8* new_buffer = (Uint8*)malloc(required_size);
+	if (new_buffer == NULL) return false;
+
+	free(wii_fast_forward_audio_buffer);
+	wii_fast_forward_audio_buffer = new_buffer;
+	wii_fast_forward_audio_buffer_size = required_size;
+	return true;
+}
+
+static void wii_free_fast_forward_audio_buffer(void) {
+	free(wii_fast_forward_audio_buffer);
+	wii_fast_forward_audio_buffer = NULL;
+	wii_fast_forward_audio_buffer_size = 0;
+}
+
+static void wii_update_fast_forward(void) {
+	bool pressed = wii_keyboard_fast_forward_held || wii_nunchuk_fast_forward_held;
+
+	if (pressed) {
+		if (audio_speed == WII_FAST_FORWARD_RATIO) return;
+		if (!wii_prepare_fast_forward_audio_buffer()) return;
+		init_timer(BASE_FPS * WII_FAST_FORWARD_RATIO);
+		audio_speed = WII_FAST_FORWARD_RATIO;
+	} else {
+		if (audio_speed == 1) return;
+		init_timer(BASE_FPS);
+		audio_speed = 1;
+	}
+}
+
+static void wii_set_keyboard_fast_forward(bool pressed) {
+	if (wii_keyboard_fast_forward_held == pressed) return;
+	wii_keyboard_fast_forward_held = pressed;
+	wii_update_fast_forward();
+}
+
+static void wii_set_nunchuk_fast_forward(bool pressed) {
+	if (wii_nunchuk_fast_forward_held == pressed) return;
+	wii_nunchuk_fast_forward_held = pressed;
+	wii_update_fast_forward();
+}
+#endif
 #endif
 
 void audio_callback(void* userdata, Uint8* stream_orig, int len_orig) {
@@ -2589,7 +2675,20 @@ void audio_callback(void* userdata, Uint8* stream_orig, int len_orig) {
 #ifdef USE_FAST_FORWARD
 	if (audio_speed > 1) {
 		len = len_orig * audio_speed;
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+		/* The Wii buffer is prepared on the main thread before audio_speed is
+		 * raised. Never allocate from the real-time audio callback. */
+		if (wii_fast_forward_audio_buffer != NULL &&
+			(size_t)len <= wii_fast_forward_audio_buffer_size) {
+			stream = wii_fast_forward_audio_buffer;
+		} else {
+			/* Fail safely if the audio backend reports an unexpected callback size. */
+			len = len_orig;
+			stream = stream_orig;
+		}
+#else
 		stream = malloc(len);
+#endif
 	} else
 #endif
 	{
@@ -2645,7 +2744,9 @@ void audio_callback(void* userdata, Uint8* stream_orig, int len_orig) {
 #endif
 #endif
 
+#if !defined(__WII__) && !defined(HW_RVL) && !defined(GEKKO)
 		free(stream);
+#endif
 	}
 #endif
 
@@ -2689,6 +2790,14 @@ void init_digi() {
 	}
 	//SDL_PauseAudio(0);
 	digi_audiospec = desired;
+#if (defined(__WII__) || defined(HW_RVL) || defined(GEKKO)) && defined(USE_FAST_FORWARD)
+	/* If fast-forward was requested before the audio device existed, prepare
+	 * its buffer now while the newly opened device is still paused. */
+	if (audio_speed > 1 && !wii_prepare_fast_forward_audio_buffer()) {
+		init_timer(BASE_FPS);
+		audio_speed = 1;
+	}
+#endif
 }
 
 const int sound_channel = 0;
@@ -4657,6 +4766,14 @@ static bool wii_handle_family_raw_button(const SDL_JoyButtonEvent* button_event,
 #endif
 		return true;
 	}
+	if (button_event->button == 3) { // physical 2
+#ifdef USE_FAST_FORWARD
+		wii_set_nunchuk_fast_forward(pressed);
+		return true;
+#else
+		return false;
+#endif
+	}
 
 	return false;
 }
@@ -4712,6 +4829,9 @@ static void clear_wii_controller_state(void) {
 }
 
 static void activate_wii_controller(SDL_GameController* controller) {
+#ifdef USE_FAST_FORWARD
+	wii_set_nunchuk_fast_forward(false);
+#endif
 	wii_minus_held = false;
 	wii_classic_reset_right_stick();
 	sdl_controller_ = controller;
@@ -4748,8 +4868,12 @@ void process_events() {
 				// Handle these separately, so they won't interrupt things that are usually interrupted by a keypress. (pause, cutscene)
 #ifdef USE_FAST_FORWARD
 				if (scancode == SDL_SCANCODE_GRAVE) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+					wii_set_keyboard_fast_forward(true);
+#else
 					init_timer(BASE_FPS * FAST_FORWARD_RATIO); // fast-forward on
 					audio_speed = FAST_FORWARD_RATIO;
+#endif
 					break;
 				}
 #endif
@@ -4848,8 +4972,12 @@ void process_events() {
 
 #ifdef USE_FAST_FORWARD
 				if (event.key.keysym.scancode == SDL_SCANCODE_GRAVE) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+					wii_set_keyboard_fast_forward(false);
+#else
 					init_timer(BASE_FPS); // fast-forward off
 					audio_speed = 1;
+#endif
 					break;
 				}
 #endif

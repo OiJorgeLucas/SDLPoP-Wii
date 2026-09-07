@@ -93,17 +93,31 @@ wii_controller_kind wii_input_get_controller_kind(SDL_GameController* controller
 	return WII_CONTROLLER_NUNCHUK;
 }
 
+int wii_input_get_wpad_channel(SDL_Joystick* joystick) {
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (joystick == NULL) return -1;
+
+	const char* name = SDL_JoystickName(joystick);
+	int channel = -1;
+	if (name == NULL || sscanf(name, "Wiimote %d", &channel) != 1 ||
+			channel < WPAD_CHAN_0 || channel > WPAD_CHAN_3) {
+		return -1;
+	}
+	return channel;
+#else
+	(void)joystick;
+	return -1;
+#endif
+}
+
 wii_controller_kind wii_input_get_physical_controller_kind(SDL_Joystick* joystick) {
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 	if (joystick == NULL) return WII_CONTROLLER_NONE;
 
 	const char* name = SDL_JoystickName(joystick);
 	if (is_gamecube_name(name)) return WII_CONTROLLER_GAMECUBE;
-	int channel = -1;
-	if (name == NULL || sscanf(name, "Wiimote %d", &channel) != 1 ||
-			channel < WPAD_CHAN_0 || channel > WPAD_CHAN_3) {
-		return WII_CONTROLLER_NONE;
-	}
+	int channel = wii_input_get_wpad_channel(joystick);
+	if (channel < 0) return WII_CONTROLLER_NONE;
 
 	WPADData* data = WPAD_Data(channel);
 	if (data == NULL || data->err == WPAD_ERR_NO_CONTROLLER) return WII_CONTROLLER_NONE;
@@ -117,6 +131,44 @@ wii_controller_kind wii_input_get_physical_controller_kind(SDL_Joystick* joystic
 #else
 	(void)joystick;
 	return WII_CONTROLLER_NONE;
+#endif
+}
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+static Uint32 classic_priority_buttons_from_wpad(u32 buttons) {
+	Uint32 result = 0;
+	if (buttons & WPAD_CLASSIC_BUTTON_A) result |= WII_CLASSIC_PRIORITY_BUTTON_A;
+	if (buttons & WPAD_CLASSIC_BUTTON_B) result |= WII_CLASSIC_PRIORITY_BUTTON_B;
+	if (buttons & WPAD_CLASSIC_BUTTON_MINUS) result |= WII_CLASSIC_PRIORITY_BUTTON_MINUS;
+	if (buttons & WPAD_CLASSIC_BUTTON_PLUS) result |= WII_CLASSIC_PRIORITY_BUTTON_PLUS;
+	if (buttons & (WPAD_BUTTON_HOME | WPAD_CLASSIC_BUTTON_HOME)) result |= WII_CLASSIC_PRIORITY_BUTTON_HOME;
+	if (buttons & WPAD_CLASSIC_BUTTON_LEFT) result |= WII_CLASSIC_PRIORITY_BUTTON_LEFT;
+	if (buttons & WPAD_CLASSIC_BUTTON_RIGHT) result |= WII_CLASSIC_PRIORITY_BUTTON_RIGHT;
+	if (buttons & WPAD_CLASSIC_BUTTON_UP) result |= WII_CLASSIC_PRIORITY_BUTTON_UP;
+	if (buttons & WPAD_CLASSIC_BUTTON_DOWN) result |= WII_CLASSIC_PRIORITY_BUTTON_DOWN;
+	return result;
+}
+#endif
+
+bool wii_input_read_classic_priority_state(int channel, wii_classic_priority_state* state) {
+	if (state == NULL) return false;
+	memset(state, 0, sizeof(*state));
+
+#if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
+	if (channel < WPAD_CHAN_0 || channel > WPAD_CHAN_3) return false;
+	WPADData* data = WPAD_Data(channel);
+	if (data == NULL || data->err == WPAD_ERR_NO_CONTROLLER ||
+			data->exp.type != WPAD_EXP_CLASSIC) {
+		return false;
+	}
+
+	state->held = classic_priority_buttons_from_wpad(data->btns_h);
+	state->down = classic_priority_buttons_from_wpad(data->btns_d);
+	state->up = classic_priority_buttons_from_wpad(data->btns_u);
+	return true;
+#else
+	(void)channel;
+	return false;
 #endif
 }
 

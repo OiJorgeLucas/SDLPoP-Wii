@@ -2,27 +2,27 @@
 
 Nintendo Wii port of [SDLPoP](https://github.com/NagyD/SDLPoP), the open-source port of *Prince of Persia* based on the disassembly of the DOS version.
 
-**SDLPoP Wii 1.0** is developed by **OiJorgeLucas**.
+SDLPoP was created by **Dávid Nagy (NagyD)** with contributions from many other developers over the years. The Nintendo Wii version was ported by **OiJorgeLucas**.
 
-The goal of this port is to preserve the original SDLPoP experience while making it feel at home on Nintendo Wii, with native controller layouts, Wii-specific video handling, portable application paths, loading optimizations, Homebrew Channel integration, and support for the major features of SDLPoP.
+The goal of this port is to preserve the original SDLPoP experience while making it feel at home on Nintendo Wii, with native controller support, Wii-specific video handling, optimized loading, portable application paths, Homebrew Channel integration, and support for the major features of SDLPoP.
 
 ## Features
 
 * Wii Remote support.
 * Wii Remote + Nunchuk support.
 * Classic Controller support.
+* GameCube Controller support.
 * USB keyboard support.
 * Controller hotplug support.
-* Controller-based text entry.
+* Controller-based text entry without requiring a keyboard.
 * Quicksave and quickload.
+* 4× fast-forward.
+* Screenshot capture.
 * SDLPoP mods and custom levelsets.
-* Replay playback and replay recording.
-* Replay filtering by the currently active levelset.
+* Replay playback and replay recording, with replay filtering by the active levelset.
 * Wii-specific 4:3 and 16:9 presentation handling.
-* Wii-specific resource and directory caching.
 * Optimized loading for both DAT and extracted resources.
-* Portable paths based on the directory containing `boot.dol`.
-* Multiple independent installations with separate configurations.
+* Portable application paths and support for multiple independent installations.
 * Clean return to the Homebrew Channel.
 
 ## Installation
@@ -49,40 +49,15 @@ apps/
 
 Then launch **SDLPoP Wii** from the Homebrew Channel.
 
-The Wii build uses the directory containing `boot.dol` as its application root. The folder does not need to be named `sdlpop`.
-
-For example, these can coexist as completely independent installations:
-
-```text
-apps/sdlpop/
-apps/princess/
-apps/another-config/
-```
-
-Each installation can have its own `SDLPoP.ini`, saves, replays, mods and selected levelset.
-
 The internal SDLPoP resource layout remains unchanged. Keep `data/`, `mods/` and other game resources in their normal locations inside the application directory.
+
+The application folder does not need to be named `sdlpop`. See [Portable Application Paths](#portable-application-paths) for information about using multiple independent installations.
 
 ## Controls
 
-SDLPoP Wii provides three dedicated Wii controller layouts.
+SDLPoP Wii provides dedicated layouts for Wii Remote, Wii Remote + Nunchuk, Classic Controller and GameCube Controller.
 
-Some Prince of Persia actions are contextual. For example, movement and action inputs may also be used for climbing, sword fighting or other situations when appropriate.
-
-### Classic Controller — SNES-style layout
-
-Designed as the traditional 16-bit-style control option.
-
-| Button | Gameplay | Menus |
-| --- | --- | --- |
-| D-Pad / Left Stick | Movement | Navigate |
-| B | Forward Jump | Back |
-| A | Special Actions (shuffle, grab, etc.) | Confirm |
-| X | Grab | — |
-| Y | Show remaining time | — |
-| L / R | Crouch | — |
-| + | Pause menu | — |
-| HOME | Quit confirmation | — |
+Some *Prince of Persia* actions are contextual. Movement and action inputs may also be used for climbing, sword fighting and other situations when appropriate.
 
 ### Wii Remote — NES/Master System-style layout
 
@@ -91,8 +66,8 @@ Hold the Wii Remote horizontally.
 | Button | Gameplay | Menus |
 | --- | --- | --- |
 | D-Pad | Movement | Navigate |
-| 2 | Forward Jump | Confirm |
-| 1 | Special Actions (shuffle, grab, etc.) | Back |
+| 2 | Forward Jump / Block | Confirm |
+| 1 | Special Actions / Grab | Back |
 | A | Show remaining time | — |
 | B | Crouch | — |
 | + | Pause menu | — |
@@ -100,40 +75,104 @@ Hold the Wii Remote horizontally.
 
 ### Wii Remote + Nunchuk — Wii-style layout
 
-A Wii-specific layout built around analog movement and the Wii Remote face buttons.
+A Wii-specific layout built around analog movement.
 
 | Button | Gameplay | Menus |
 | --- | --- | --- |
-| Nunchuk Stick / D-Pad | Movement | Navigate |
-| A | Forward Jump | Confirm |
-| B | Special Actions (shuffle, grab, etc.) | Back |
+| Nunchuk Stick | Movement | Navigate |
+| Wii Remote D-Pad | Replay shortcuts | Navigate |
+| A | Forward Jump / Block | Confirm |
+| B | Special Actions / Grab | Back |
 | Z | Crouch | — |
 | C | Show remaining time | — |
 | + | Pause menu | — |
 | HOME | Quit confirmation | — |
 
-### Replay and recording shortcuts
+During gameplay, the Wii Remote D-Pad is reserved for replay controls and does not move the character when a Nunchuk is connected.
 
-The `-` button acts as the replay shortcut modifier and must be held first.
+### Classic Controller — SNES-style layout
 
-**Wii Remote**
+Designed as the traditional 16-bit-style control option.
 
-* `-` + D-Pad Right: view or cycle through replays.
-* `-` + D-Pad Left: start or stop replay recording.
+| Button | Gameplay | Menus |
+| --- | --- | --- |
+| D-Pad / Left Stick | Movement | Navigate |
+| B | Forward Jump / Block | Back |
+| A / X | Special Actions / Grab | A: Confirm |
+| Y | Show remaining time | — |
+| L / R / ZL / ZR | Crouch | — |
+| + | Pause menu | — |
+| HOME | Quit confirmation | — |
 
-**Classic Controller**
+The Right Stick is reserved for replay shortcuts and does not move the character.
 
-* `-` + D-Pad Right: view or cycle through replays.
-* `-` + D-Pad Left: start or stop replay recording.
+### GameCube Controller
 
-**Wii Remote + Nunchuk**
+| Button | Gameplay | Menus |
+| --- | --- | --- |
+| D-Pad / Control Stick | Movement | Navigate |
+| A | Forward Jump / Block | Confirm |
+| B / X | Special Actions / Grab | B: Back |
+| Y | Show remaining time | — |
+| L / R | Crouch | — |
+| Start | Pause menu | — |
+| Z | Shortcut modifier | — |
 
-* `-` + `1`: view or cycle through replays.
-* `-` + `2`: start or stop replay recording.
+The C-Stick is reserved for replay shortcuts and does not move the character. `Z` + `Start` opens the quit confirmation.
+
+### Controller priority
+
+When a Classic Controller is connected, it controls gameplay while only the Wii Remote `HOME` button remains active.
+
+When a GameCube Controller is connected, it takes priority for gameplay. Wii Remote `HOME` remains available for the quit confirmation.
 
 ### USB keyboard
 
 USB keyboards are supported and retain the original SDLPoP keyboard controls.
+
+## Replay and Recording Shortcuts
+
+When replay support is enabled, the following shortcuts are available:
+
+| Action | Wii Remote | Nunchuk | Classic Controller | GameCube Controller |
+| --- | --- | --- | --- | --- |
+| Start / stop recording | `-` + D-Pad Left | D-Pad Left | `-` + Right Stick Left | `Z` + C-Stick Left |
+| Start / next replay | `-` + D-Pad Right | D-Pad Right | `-` + Right Stick Right | `Z` + C-Stick Right |
+| Next level during replay | `-` + D-Pad Up | D-Pad Up | `-` + Right Stick Up | `Z` + C-Stick Up |
+| Next room during replay | `-` + D-Pad Down | D-Pad Down | `-` + Right Stick Down | `Z` + C-Stick Down |
+
+On Wii Remote, Classic Controller and GameCube Controller, hold the modifier button before pressing or moving the directional control.
+
+The Nunchuk uses the Wii Remote D-Pad directly for replay shortcuts and does not require a modifier.
+
+USB keyboard replay controls remain unchanged from SDLPoP: `Ctrl` + `Tab` starts or stops recording, and `Tab` starts replay playback from the title screen.
+
+## Screenshots
+
+Screenshots can be captured directly from the supported Wii controllers:
+
+| Controller | Shortcut |
+| --- | --- |
+| Wii Remote | `-` + `A` |
+| Wii Remote + Nunchuk | `1` |
+| Classic Controller | `-` + `Y` |
+| GameCube Controller | `Z` + `Y` |
+
+For shortcuts that use a modifier, hold the modifier button first and then press the screenshot button.
+
+## Fast-Forward
+
+SDLPoP Wii supports 4× fast-forward for quickly moving through gameplay and cutscenes.
+
+| Controller | Shortcut |
+| --- | --- |
+| Wii Remote | — |
+| Wii Remote + Nunchuk | Hold `2` |
+| Classic Controller | Hold `-` + `ZR` |
+| GameCube Controller | — |
+| USB keyboard | Hold `` ` `` |
+
+Fast-forward remains active only while the shortcut is held. Gameplay and audio are accelerated together.
 
 ## Quicksave and Quickload
 
@@ -185,64 +224,59 @@ Princess levelset → Princess replays
 another mod       → that mod's replays
 ```
 
-Replay loading also benefits from Wii-specific resource caching.
-
 ## Game Data and Loading
 
-SDLPoP Wii supports both DAT files and extracted resources.
+SDLPoP Wii supports both original `.DAT` files and extracted game resources.
 
-DAT resources generally provide the fastest loading path. Extracted resources are also fully supported.
+Both formats are fully supported and include Wii-specific loading optimizations. Extracted resources already load quickly enough that gameplay is not interrupted by noticeable waiting in normal use.
 
-The Wii port adds several loading optimizations for the console's filesystem characteristics, including:
+Using the original `.DAT` files is still recommended for the best possible performance, as many transitions can become effectively instantaneous.
 
-* cached directory lookups;
-* cached original environment resources;
-* cached raw extracted Kid resources used when rebuilding sprites;
-* hidden preload work during the opening sequence when the original game is using extracted or mixed resources.
-
-DAT-based original installations and mods continue to use their normal loading paths.
-
-Do not remove DAT files that are already part of the standard SDLPoP distribution.
+Mods may also use the standard SDLPoP data layouts supported by the game.
 
 ## Video and Aspect Ratio
 
-The Wii build always runs fullscreen.
+SDLPoP Wii automatically adapts its default presentation to the Wii system aspect ratio.
 
-SDLPoP renders internally on its 320×200 logical canvas. Wii-specific aspect-ratio handling is applied only during final presentation.
+On a Wii configured for **16:9**, the default presentation uses **16:10 aspect correction** with **Fuzzy** scaling, providing proportions close to the original PC presentation while making good use of widescreen displays.
 
-On a Wii configured for **16:9**, enabling **Correct aspect ratio** compensates for widescreen stretching and presents the game at its intended proportions.
+On a Wii configured for **4:3**, the game uses the normal full-width presentation with **Sharp** scaling.
 
-On a Wii configured for **4:3**, the normal full-width presentation is retained.
+Aspect correction can be changed from the in-game settings:
+
+* **Off** — use the full available width.
+* **16:10** — preserve the original 320×200-style proportions.
+* **4:3** — present the game in a narrower traditional 4:3 frame.
+
+The aspect correction setting only affects widescreen Wii configurations. On a Wii configured for 4:3, changing this setting has no visual effect.
+
+The scaling method can also be changed independently between **Sharp**, **Fuzzy**, and **Blurry**.
 
 ## Portable Application Paths
 
-Unlike desktop builds that may search multiple system locations, the Wii port resolves its files from the directory containing the running `boot.dol`.
+SDLPoP Wii supports multiple independent installations on the same SD card or USB device.
 
-This makes the application portable and allows multiple independent SDLPoP installations on the same SD card or USB device.
+For example:
 
-Save files and other writable files are also kept relative to that application directory.
+```text
+apps/
+├── sdlpop/
+├── sdlpop-original/
+├── sdlpop-mod/
+└── sdlpop-another-setup/
+```
 
-## Startup Input Note
+Each installation can keep its own configuration, game data, mods, saves and other files without interfering with the others.
 
-On some Wii setups, Wii Remote and USB keyboard input may take a brief moment to become available after launch.
-
-If the first input on the splash screen is not detected, wait a moment and press again.
-
-This does not affect normal gameplay controls.
+The application folder can also be renamed freely, making it easy to keep separate setups for the original game, different mods or different configurations.
 
 ## Building
 
-The Wii port is built with **devkitPPC** and the Wii libraries provided by **devkitPro**.
+The Wii version can be built using the official devkitPro Docker image.
 
-The project uses `Makefile.wii`.
-
-### Docker build
-
-The development workflow used for the Wii port can be reproduced with the official devkitPro container:
+From the root of the repository, run:
 
 ```bash
-cd ~/projetos/SDLPoP
-
 docker run --rm \
   -v "$PWD":/src \
   -w /src \
@@ -257,79 +291,39 @@ docker run --rm \
 
     make -f Makefile.wii clean
     make -f Makefile.wii -j2
-  ' 2>&1 | tee build-wii.log
+  '
 ```
 
-A successful build produces:
+The resulting Wii executable is:
 
 ```text
-prince.elf
 boot.dol
 ```
 
-### Local devkitPro build
-
-A local devkitPro installation can be used instead of Docker.
-
-Install devkitPPC and the Wii portlibs required by the project, including SDL2 and SDL2_image, then configure the standard devkitPro environment.
-
-For the usual `/opt/devkitpro` installation:
+To create the complete Homebrew Channel package, run:
 
 ```bash
-cd ~/projetos/SDLPoP
-
-export DEVKITPRO=/opt/devkitpro
-export DEVKITPPC=$DEVKITPRO/devkitPPC
-export PATH=$DEVKITPPC/bin:$DEVKITPRO/tools/bin:$PATH
-export WIIPORTLIBS=$DEVKITPRO/portlibs/wii
-export PPCPORTLIBS=$DEVKITPRO/portlibs/ppc
-export PKG_CONFIG_PATH=$WIIPORTLIBS/lib/pkgconfig:$PPCPORTLIBS/lib/pkgconfig
-
-make -f Makefile.wii clean
-make -f Makefile.wii -j2
-```
-
-If devkitPro is installed somewhere else, adjust `DEVKITPRO` accordingly.
-
-### Creating the Wii package
-
-After building `boot.dol`, create the Homebrew Channel directory and release ZIP with:
-
-```bash
-cd ~/projetos/SDLPoP
 ./wii/package.sh
 ```
 
-The packaging script validates the Homebrew Channel icon and creates:
-
-```text
-dist-wii/apps/sdlpop/
-SDLPoP-Wii-1.0.zip
-```
-
-The package can be inspected with:
-
-```bash
-find dist-wii -type f | sort
-unzip -l SDLPoP-Wii-1.0.zip
-```
+The packaging script validates the required metadata and icon, creates the Homebrew Channel directory structure under `dist-wii/`, and generates a versioned release ZIP.
 
 ## Credits
 
-* [Jordan Mechner](https://github.com/jmechner) — creator of *Prince of Persia*.
-* [Dávid Nagy (NagyD)](https://github.com/NagyD) — creator of SDLPoP.
-* [Alberto Mardegan (mardy)](https://github.com/mardy) — for his Wii/GameCube SDL2 work, which was an important reference for this port.
+* **Jordan Mechner** — creator of *Prince of Persia* and author of the original Apple II source code that helped document and preserve the game.
+* **Dávid Nagy (NagyD)** and all **SDLPoP contributors** — for creating, maintaining and expanding SDLPoP over the years. See the [upstream SDLPoP repository](https://github.com/NagyD/SDLPoP) for the full contributor credits.
+* **Alberto Mardegan (mardy)** — for his Wii/GameCube SDL2 work, which was an important reference for this port.
 * **devkitPro / libogc** — for the Wii development toolchain and libraries used by this port.
 
 ## Special Thanks
 
-* [Ismael Cardoso](https://github.com/ismaelcardosos), my cousin, for introducing me to AI tools and teaching me how to use them to accelerate my learning and development process. His guidance made this port possible much sooner than it otherwise would have been.
+* **Ismael Cardoso**, my cousin, for introducing me to AI tools and teaching me how to use them to accelerate my learning and development process. His guidance made this port possible much sooner than it otherwise would have been.
 * **Raimunda Aparecida Carvalho Cardoso**, my mother, and **Maria Sonia de Carvalho Cardoso**, my aunt, for their support and encouragement.
 * **Erika da Conceição de Abreu Cardoso**, my future wife, for her support, patience and encouragement throughout this project.
 
 ## Upstream SDLPoP
 
-SDLPoP is an open-source port/conversion of the DOS game *Prince of Persia*, based on the disassembly of the original PoP1 for DOS and extended with many additional features.
+SDLPoP is the upstream project on which SDLPoP Wii is based.
 
 Upstream repository:
 
@@ -354,4 +348,8 @@ The following source files are external components with their own licenses:
 * `src/opl3.h`
 * `src/stb_vorbis.c`
 
-See [`doc/THIRD_PARTY_NOTICES.md`](doc/THIRD_PARTY_NOTICES.md) for additional third-party attribution and license information.
+For third-party software used by the Nintendo Wii build, see:
+
+```text
+doc/THIRD_PARTY_NOTICES.md
+```

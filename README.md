@@ -310,14 +310,14 @@ The packaging script validates the required metadata and icon, creates the Homeb
 
 ## Credits
 
-* **Jordan Mechner** — creator of *Prince of Persia* and author of the original Apple II source code that helped document and preserve the game.
-* **Dávid Nagy (NagyD)** and all **SDLPoP contributors** — for creating, maintaining and expanding SDLPoP over the years. See the [upstream SDLPoP repository](https://github.com/NagyD/SDLPoP) for the full contributor credits.
-* **Alberto Mardegan (mardy)** — for his Wii/GameCube SDL2 work, which was an important reference for this port.
+* [Jordan Mechner](https://github.com/jmechner) — creator of *Prince of Persia* and author of the original Apple II source code that helped document and preserve the game.
+* [Dávid Nagy (NagyD)](https://github.com/NagyD) and all **SDLPoP contributors** — for creating, maintaining and expanding SDLPoP over the years. See the [upstream SDLPoP repository](https://github.com/NagyD/SDLPoP) for the full contributor credits.
+* [Alberto Mardegan (mardy)](https://github.com/mardy) — for his Wii/GameCube SDL2 work, which was an important reference for this port.
 * **devkitPro / libogc** — for the Wii development toolchain and libraries used by this port.
 
 ## Special Thanks
 
-* **Ismael Cardoso**, my cousin, for introducing me to AI tools and teaching me how to use them to accelerate my learning and development process. His guidance made this port possible much sooner than it otherwise would have been.
+* [Ismael Cardoso](https://github.com/ismaelcardosos), my cousin, for introducing me to AI tools and teaching me how to use them to accelerate my learning and development process. His guidance made this port possible much sooner than it otherwise would have been.
 * **Raimunda Aparecida Carvalho Cardoso**, my mother, and **Maria Sonia de Carvalho Cardoso**, my aunt, for their support and encouragement.
 * **Erika da Conceição de Abreu Cardoso**, my future wife, for her support, patience and encouragement throughout this project.
 
@@ -348,8 +348,5 @@ The following source files are external components with their own licenses:
 * `src/opl3.h`
 * `src/stb_vorbis.c`
 
-For third-party software used by the Nintendo Wii build, see:
 
-```text
-doc/THIRD_PARTY_NOTICES.md
-```
+For third-party software used by the Nintendo Wii build, see [`doc/THIRD_PARTY_NOTICES.md`](doc/THIRD_PARTY_NOTICES.md).

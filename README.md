@@ -228,9 +228,11 @@ another mod       → that mod's replays
 
 SDLPoP Wii supports both original `.DAT` files and extracted game resources.
 
-Both formats are fully supported and include Wii-specific loading optimizations. Extracted resources already load quickly enough that gameplay is not interrupted by noticeable waiting in normal use.
+The original *Prince of Persia* game data **is not included with SDLPoP Wii releases**. To use the original `.DAT` files, copy your own original game files into the `data/` directory inside the SDLPoP Wii application folder.
 
 Using the original `.DAT` files is still recommended for the best possible performance, as many transitions can become effectively instantaneous.
+
+Both formats are fully supported and include Wii-specific loading optimizations. Extracted resources already load quickly enough that gameplay is not interrupted by noticeable waiting in normal use.
 
 Mods may also use the standard SDLPoP data layouts supported by the game.
 

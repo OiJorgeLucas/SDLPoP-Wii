@@ -47,6 +47,12 @@ apps/
         └── THIRD_PARTY_NOTICES.md
 ```
 
+The original *Prince of Persia* game data is **not included with SDLPoP Wii releases**.
+
+For the **best possible loading performance**, using the original `.DAT` files is **recommended**. Copy your own original game files into the `data/` directory inside the SDLPoP Wii application folder.
+
+Extracted game resources are included with the release, are fully supported, and benefit from Wii-specific loading optimizations.
+
 Then launch **SDLPoP Wii** from the Homebrew Channel.
 
 The internal SDLPoP resource layout remains unchanged. Keep `data/`, `mods/` and other game resources in their normal locations inside the application directory.
@@ -223,18 +229,6 @@ original levelset → original replays
 Princess levelset → Princess replays
 another mod       → that mod's replays
 ```
-
-## Game Data and Loading
-
-SDLPoP Wii supports both original `.DAT` files and extracted game resources.
-
-The original *Prince of Persia* game data **is not included with SDLPoP Wii releases**. To use the original `.DAT` files, copy your own original game files into the `data/` directory inside the SDLPoP Wii application folder.
-
-Using the original `.DAT` files is still recommended for the best possible performance, as many transitions can become effectively instantaneous.
-
-Both formats are fully supported and include Wii-specific loading optimizations. Extracted resources already load quickly enough that gameplay is not interrupted by noticeable waiting in normal use.
-
-Mods may also use the standard SDLPoP data layouts supported by the game.
 
 ## Video and Aspect Ratio
 

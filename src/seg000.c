@@ -1142,6 +1142,17 @@ void load_sounds(int first,int last) {
 
 // seg000:0C5E
 void load_opt_sounds(int first,int last) {
+	// Sounds stay loaded for the lifetime of the game. Avoid reopening the
+	// optional sound DATs when the whole requested range is already in memory.
+	bool all_loaded = true;
+	for (short current = first; current <= last; ++current) {
+		if (sound_pointers[current] == NULL) {
+			all_loaded = false;
+			break;
+		}
+	}
+	if (all_loaded) return;
+
 	// stub
 	dat_type* ibm_dat = NULL;
 	dat_type* digi_dat = NULL;

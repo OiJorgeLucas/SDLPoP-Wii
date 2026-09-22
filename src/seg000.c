@@ -201,8 +201,7 @@ static bool wii_adopt_loaded_environment(int environment_type);
 static bool wii_load_dungeon_res200_prefix(void);
 static bool wii_load_palace_res200_prefix(void);
 static void wii_prepare_extracted_resources(void);
-static void wii_load_environment_optional_range(
-	const char* filename, chtab_type* environment, int graf_index);
+static bool wii_load_environment_optional_ranges(int environment_type);
 #endif
 
 // seg000:024F
@@ -1454,20 +1453,6 @@ static bool wii_finish_palace_res200(void) {
 	return true;
 }
 
-static bool wii_load_environment_next_optional_range(int environment_type) {
-	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
-
-	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
-	if (entry->environment == NULL) return false;
-	if (entry->optional_next_range >= WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return true;
-
-	char filename[20];
-	wii_get_environment_filename(environment_type, filename, sizeof(filename));
-	wii_load_environment_optional_range(filename, entry->environment, entry->optional_next_range);
-	++entry->optional_next_range;
-	return true;
-}
-
 static bool wii_load_environment_wall(int environment_type) {
 	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
 
@@ -1586,9 +1571,7 @@ static bool wii_load_environment_cache_entry(int environment_type) {
 	} else if (!wii_load_environment_res200(environment_type)) {
 		goto error;
 	}
-	while (entry->optional_next_range < WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) {
-		if (!wii_load_environment_next_optional_range(environment_type)) goto error;
-	}
+	if (!wii_load_environment_optional_ranges(environment_type)) goto error;
 	if (!wii_load_environment_wall(environment_type)) goto error;
 	if (!wii_finish_environment_cache_entry(environment_type)) goto error;
 	return true;
@@ -2298,19 +2281,32 @@ void load_one_optgraf(chtab_type* chtab_ptr,dat_pal_type* pal_ptr,int base_id,in
 byte optgraf_min[] = {0x01, 0x1E, 0x4B, 0x4E, 0x56, 0x65, 0x7F, 0x0A};
 byte optgraf_max[] = {0x09, 0x1F, 0x4D, 0x53, 0x5B, 0x7B, 0x8F, 0x0D};
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
-static void wii_load_environment_optional_range(
-	const char* filename, chtab_type* environment, int graf_index
-) {
-	if (filename == NULL || environment == NULL ||
-		graf_index < 0 || graf_index >= WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return;
+static bool wii_load_environment_optional_ranges(int environment_type) {
+	if (environment_type < 0 || environment_type >= WII_ENVIRONMENT_CACHE_COUNT) return false;
+
+	wii_environment_cache_type* entry = &wii_environment_cache[environment_type];
+	if (entry->environment == NULL) return false;
+	if (entry->optional_next_range >= WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) return true;
+
+	char filename[20];
+	wii_get_environment_filename(environment_type, filename, sizeof(filename));
 
 	dat_shpl_type area;
 	dat_type* dathandle = open_dat(filename, 'G');
+	if (dathandle == NULL) return false;
+
 	load_from_opendats_to_area(200, &area, sizeof(area), "pal");
 	area.palette.row_bits = 0x20;
-	load_one_optgraf(environment, &area.palette, 1200,
-		optgraf_min[graf_index] - 1, optgraf_max[graf_index] - 1);
+
+	while (entry->optional_next_range < WII_ENVIRONMENT_OPTIONAL_RANGE_COUNT) {
+		int graf_index = entry->optional_next_range;
+		load_one_optgraf(entry->environment, &area.palette, 1200,
+			optgraf_min[graf_index] - 1, optgraf_max[graf_index] - 1);
+		++entry->optional_next_range;
+	}
+
 	close_dat(dathandle);
+	return true;
 }
 #endif
 // seg000:13FC

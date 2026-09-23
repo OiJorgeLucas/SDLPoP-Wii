@@ -1420,7 +1420,7 @@ void control_kid() {
 			}
 		} else {
 			if (key) {
-				start_level = custom->first_level; // 1
+				start_level = consume_first_level(); // 1
 				start_game();
 			}
 		}

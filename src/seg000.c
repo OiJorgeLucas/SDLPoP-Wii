@@ -243,6 +243,20 @@ void init_game_main() {
 word first_start = 1;
 // data:4C38
 jmp_buf setjmp_buf;
+
+int consume_first_level(void) {
+	int level_number = custom->first_level;
+	if (level_number == 0) {
+		/* Level 0 is the demo. Preserve it for this start, then make the
+		 * persistent first level safe for the next start or next launch. */
+		custom_saved.first_level = 1;
+#ifdef USE_MENU
+		save_ingame_settings();
+#endif
+	}
+	return level_number;
+}
+
 // seg000:0358
 void start_game() {
 #ifdef USE_COPYPROT
@@ -282,7 +296,7 @@ void start_game() {
 	}
 #endif
 	if (custom->skip_title) { // CusPop option: skip the title sequence (level loads instantly)
-		int level_number = (start_level >= 0) ? start_level : custom->first_level;
+		int level_number = (start_level >= 0) ? start_level : consume_first_level();
 		init_game(level_number);
 		return;
 	}
@@ -642,14 +656,14 @@ int process_key() {
 				start_replay();
 			}
 			else if (key == (SDL_SCANCODE_TAB | WITH_CTRL)) {
-				start_level = custom->first_level;
+				start_level = consume_first_level();
 				start_recording();
 			} else
 			#endif
 			if (key == (SDL_SCANCODE_L | WITH_CTRL)) { // Ctrl+L
 				if (!load_game()) return 0;
 			} else {
-				start_level = custom->first_level; // 1
+				start_level = consume_first_level(); // 1
 			}
 			draw_rect(&screen_rect, color_0_black);
 #ifdef USE_FADE

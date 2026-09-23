@@ -22,6 +22,7 @@ The authors of this program may be contacted at https://forum.princed.org
 void pop_main(void);
 void init_game_main(void);
 void start_game(void);
+int consume_first_level(void);
 int process_key(void);
 void play_frame(void);
 void draw_game_frame(void);
@@ -728,6 +729,7 @@ void clear_menu_controls(void);
 void process_additional_menu_input(void);
 int key_test_paused_menu(int key);
 void load_ingame_settings(void);
+void save_ingame_settings(void);
 void menu_was_closed(void);
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 void wii_request_quit_confirmation(void);

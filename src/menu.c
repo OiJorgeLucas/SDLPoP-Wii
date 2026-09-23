@@ -1277,8 +1277,9 @@ void reset_paused_menu(void) {
 
 #if defined(__WII__) || defined(HW_RVL) || defined(GEKKO)
 void wii_request_quit_confirmation(void) {
-	/* Home is intentionally ignored outside an active game and during cutscenes. */
-	if (start_level < 0 || is_cutscene || is_ending_sequence || current_dialog_box != DIALOG_NONE) {
+	/* Home is intentionally ignored outside an active game, during the demo
+	 * level, and during cutscenes. */
+	if (start_level < 0 || current_level == 0 || is_cutscene || is_ending_sequence || current_dialog_box != DIALOG_NONE) {
 		return;
 	}
 
